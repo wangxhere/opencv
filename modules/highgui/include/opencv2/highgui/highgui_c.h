@@ -39,17 +39,25 @@
 //
 //M*/
 
-#ifndef __OPENCV_HIGHGUI_H__
-#define __OPENCV_HIGHGUI_H__
+#ifndef OPENCV_HIGHGUI_H
+#define OPENCV_HIGHGUI_H
 
 #include "opencv2/core/core_c.h"
 #include "opencv2/imgproc/imgproc_c.h"
+#ifdef HAVE_OPENCV_IMGCODECS
 #include "opencv2/imgcodecs/imgcodecs_c.h"
+#endif
+#ifdef HAVE_OPENCV_VIDEOIO
 #include "opencv2/videoio/videoio_c.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
+
+/** @addtogroup highgui_c
+  @{
+  */
 
 /****************************************************************************************\
 *                                  Basic GUI functions                                   *
@@ -70,7 +78,7 @@ enum {  CV_STYLE_NORMAL         = 0,//QFont::StyleNormal,
 };
 /* ---------*/
 
-//for color cvScalar(blue_component, green_component, red\_component[, alpha_component])
+//for color cvScalar(blue_component, green_component, red_component[, alpha_component])
 //and alpha= 0 <-> 0xFF (not transparent <-> transparent)
 CVAPI(CvFont) cvFontQt(const char* nameFont, int pointSize CV_DEFAULT(-1), CvScalar color CV_DEFAULT(cvScalarAll(0)), int weight CV_DEFAULT(CV_FONT_NORMAL),  int style CV_DEFAULT(CV_STYLE_NORMAL), int spacing CV_DEFAULT(0));
 
@@ -103,6 +111,7 @@ enum
     CV_WND_PROP_AUTOSIZE   = 1, //to change/get window's autosize property
     CV_WND_PROP_ASPECTRATIO= 2, //to change/get window's aspectratio property
     CV_WND_PROP_OPENGL     = 3, //to change/get window's opengl support
+    CV_WND_PROP_VISIBLE    = 4,
 
     //These 2 flags are used by cvNamedWindow and cvSet/GetWindowProperty
     CV_WINDOW_NORMAL       = 0x00000000, //the user can resize the window (no constraint)  / also use to switch a fullscreen window to a normal size
@@ -161,6 +170,8 @@ CVAPI(int) cvCreateTrackbar2( const char* trackbar_name, const char* window_name
 /* retrieve or set trackbar position */
 CVAPI(int) cvGetTrackbarPos( const char* trackbar_name, const char* window_name );
 CVAPI(void) cvSetTrackbarPos( const char* trackbar_name, const char* window_name, int pos );
+CVAPI(void) cvSetTrackbarMax(const char* trackbar_name, const char* window_name, int maxval);
+CVAPI(void) cvSetTrackbarMin(const char* trackbar_name, const char* window_name, int minval);
 
 enum
 {
@@ -236,6 +247,8 @@ CVAPI(void) cvSetPostprocessFuncWin32_(const void* callback);
 #define cvSetPostprocessFuncWin32(callback) cvSetPostprocessFuncWin32_((const void*)(callback))
 
 #endif
+
+/** @} highgui_c */
 
 #ifdef __cplusplus
 }

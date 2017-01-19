@@ -40,8 +40,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_VIDEOSTAB_INPAINTINT_HPP__
-#define __OPENCV_VIDEOSTAB_INPAINTINT_HPP__
+#ifndef OPENCV_VIDEOSTAB_INPAINTINT_HPP
+#define OPENCV_VIDEOSTAB_INPAINTINT_HPP
 
 #include <vector>
 #include "opencv2/core.hpp"
@@ -54,6 +54,9 @@ namespace cv
 {
 namespace videostab
 {
+
+//! @addtogroup videostab
+//! @{
 
 class CV_EXPORTS InpainterBase
 {
@@ -200,6 +203,8 @@ CV_EXPORTS void calcFlowMask(
 CV_EXPORTS void completeFrameAccordingToFlow(
         const Mat &flowMask, const Mat &flowX, const Mat &flowY, const Mat &frame1, const Mat &mask1,
         float distThresh, Mat& frame0, Mat &mask0);
+
+//! @}
 
 } // namespace videostab
 } // namespace cv

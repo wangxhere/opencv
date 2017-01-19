@@ -43,12 +43,15 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_BLOCK_BLOCK_HPP__
-#define __OPENCV_CUDEV_BLOCK_BLOCK_HPP__
+#ifndef OPENCV_CUDEV_BLOCK_BLOCK_HPP
+#define OPENCV_CUDEV_BLOCK_BLOCK_HPP
 
 #include "../common.hpp"
 
 namespace cv { namespace cudev {
+
+//! @addtogroup cudev
+//! @{
 
 struct Block
 {
@@ -122,6 +125,9 @@ __device__ __forceinline__ static void blockTransfrom(InIt1 beg1, InIt1 end1, In
     for(; t1 < end1; t1 += STRIDE, t2 += STRIDE, o += STRIDE)
         *o = op(*t1, *t2);
 }
+
+//! @}
+
 }}
 
 #endif

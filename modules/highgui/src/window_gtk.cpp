@@ -40,6 +40,7 @@
 //M*/
 
 #include "precomp.hpp"
+#include "opencv2/imgproc.hpp"
 
 #ifndef WIN32
 
@@ -51,13 +52,23 @@
 #include <stdio.h>
 
 #if (GTK_MAJOR_VERSION == 3)
-  #define GTK_VERSION3
+  #define GTK_VERSION3 1
 #endif //GTK_MAJOR_VERSION >= 3
+#if (GTK_MAJOR_VERSION > 3 || (GTK_MAJOR_VERSION == 3 && GTK_MINOR_VERSION >= 4))
+  #define GTK_VERSION3_4 1
+#endif
 
 #ifdef HAVE_OPENGL
     #include <gtk/gtkgl.h>
     #include <GL/gl.h>
     #include <GL/glu.h>
+#endif
+
+#ifndef BIT_ALLIN
+    #define BIT_ALLIN(x,y) ( ((x)&(y)) == (y) )
+#endif
+#ifndef BIT_MAP
+    #define BIT_MAP(x,y,z) ( ((x)&(y)) ? (z) : 0 )
 #endif
 
 // TODO Fix the initial window size when flags=0.  Right now the initial window is by default
@@ -245,7 +256,7 @@ cvImageWidget_get_preferred_width (GtkWidget *widget, gint *minimal_width, gint 
   CvImageWidget * image_widget = CV_IMAGE_WIDGET( widget );
 
   if(image_widget->original_image != NULL) {
-    *minimal_width = image_widget->flags & CV_WINDOW_AUTOSIZE ?
+    *minimal_width = (image_widget->flags & CV_WINDOW_AUTOSIZE) != CV_WINDOW_AUTOSIZE ?
       gdk_window_get_width(gtk_widget_get_window(widget)) : image_widget->original_image->cols;
   }
   else {
@@ -269,7 +280,7 @@ cvImageWidget_get_preferred_height (GtkWidget *widget, gint *minimal_height, gin
   CvImageWidget * image_widget = CV_IMAGE_WIDGET( widget );
 
   if(image_widget->original_image != NULL) {
-    *minimal_height = image_widget->flags & CV_WINDOW_AUTOSIZE ?
+    *minimal_height = (image_widget->flags & CV_WINDOW_AUTOSIZE) != CV_WINDOW_AUTOSIZE ?
       gdk_window_get_height(gtk_widget_get_window(widget)) : image_widget->original_image->rows;
   }
   else {
@@ -484,7 +495,7 @@ GType cvImageWidget_get_type (void){
           (GClassInitFunc) cvImageWidget_class_init,
           sizeof(CvImageWidget),
           (GInstanceInitFunc) cvImageWidget_init,
-          (GTypeFlags)NULL
+          (GTypeFlags)0
           );
     }
 
@@ -507,6 +518,7 @@ typedef struct CvTrackbar
     int* data;
     int pos;
     int maxval;
+    int minval;
     CvTrackbarCallback notify;
     CvTrackbarCallback2 notify2;
     void* userdata;
@@ -576,8 +588,8 @@ CV_IMPL int cvInitSystem( int argc, char** argv )
     {
         hg_windows = 0;
 
-        gtk_disable_setlocale();
         gtk_init( &argc, &argv );
+        setlocale(LC_NUMERIC,"C");
 
         #ifdef HAVE_OPENGL
             gtk_gl_init(&argc, &argv);
@@ -607,9 +619,13 @@ CV_IMPL int cvStartWindowThread(){
     // conditional that indicates a key has been pressed
     cond_have_key = g_cond_new();
 
+#if !GLIB_CHECK_VERSION(2, 32, 0)
     // this is the window update thread
     window_thread = g_thread_create((GThreadFunc) icvWindowThreadLoop,
                     NULL, TRUE, NULL);
+#else
+    window_thread = g_thread_new("OpenCV window update", (GThreadFunc)icvWindowThreadLoop, NULL);
+#endif
     }
     thread_started = window_thread!=NULL;
     return thread_started;
@@ -732,6 +748,23 @@ void cvSetModeWindow_GTK( const char* name, double prop_value)//Yannick Verdie
     __END__;
 }
 
+void cv::setWindowTitle(const String& winname, const String& title)
+{
+    CvWindow* window = icvFindWindowByName(winname.c_str());
+
+    if (!window)
+    {
+        namedWindow(winname);
+        window = icvFindWindowByName(winname.c_str());
+    }
+
+    if (!window)
+        CV_Error(Error::StsNullPtr, "NULL window");
+
+    CV_LOCK_MUTEX();
+    gtk_window_set_title(GTK_WINDOW(window->frame), title.c_str());
+    CV_UNLOCK_MUTEX();
+}
 
 double cvGetPropWindowAutoSize_GTK(const char* name)
 {
@@ -987,6 +1020,7 @@ CV_IMPL int cvNamedWindow( const char* name, int flags )
 
     CvWindow* window;
     int len;
+    int b_nautosize;
 
     cvInitSystem(1,(char**)&name);
     if( !name )
@@ -1047,6 +1081,8 @@ CV_IMPL int cvNamedWindow( const char* name, int flags )
                         G_CALLBACK(icvOnMouse), window );
     g_signal_connect( window->widget, "motion-notify-event",
                         G_CALLBACK(icvOnMouse), window );
+    g_signal_connect( window->widget, "scroll-event",
+                        G_CALLBACK(icvOnMouse), window );
     g_signal_connect( window->frame, "delete-event",
                         G_CALLBACK(icvOnClose), window );
 #if defined(GTK_VERSION3)
@@ -1057,7 +1093,12 @@ CV_IMPL int cvNamedWindow( const char* name, int flags )
                         G_CALLBACK(cvImageWidget_expose), window );
 #endif //GTK_VERSION3
 
-    gtk_widget_add_events (window->widget, GDK_BUTTON_RELEASE_MASK | GDK_BUTTON_PRESS_MASK | GDK_POINTER_MOTION_MASK) ;
+
+#if defined(GTK_VERSION3_4)
+    gtk_widget_add_events (window->widget, GDK_BUTTON_RELEASE_MASK | GDK_BUTTON_PRESS_MASK | GDK_POINTER_MOTION_MASK | GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK) ;
+#else
+    gtk_widget_add_events (window->widget, GDK_BUTTON_RELEASE_MASK | GDK_BUTTON_PRESS_MASK | GDK_POINTER_MOTION_MASK | GDK_SCROLL_MASK) ;
+#endif //GTK_VERSION3_4
 
     gtk_widget_show( window->frame );
     gtk_window_set_title( GTK_WINDOW(window->frame), name );
@@ -1066,11 +1107,11 @@ CV_IMPL int cvNamedWindow( const char* name, int flags )
         hg_windows->prev = window;
     hg_windows = window;
 
-    gtk_window_set_resizable( GTK_WINDOW(window->frame), (flags & CV_WINDOW_AUTOSIZE) == 0 );
-
+    b_nautosize = ((flags & CV_WINDOW_AUTOSIZE) == 0);
+    gtk_window_set_resizable( GTK_WINDOW(window->frame), b_nautosize );
 
     // allow window to be resized
-    if( (flags & CV_WINDOW_AUTOSIZE)==0 ){
+    if( b_nautosize ){
         GdkGeometry geometry;
         geometry.min_width = 50;
         geometry.min_height = 50;
@@ -1197,13 +1238,33 @@ static void icvDeleteWindow( CvWindow* window )
     }
 
     cvFree( &window );
+
+    // if last window...
+    if( hg_windows == 0 )
+    {
 #ifdef HAVE_GTHREAD
-    // if last window, send key press signal
-    // to jump out of any waiting cvWaitKey's
-    if(hg_windows==0 && thread_started){
-        g_cond_broadcast(cond_have_key);
-    }
+        if( thread_started )
+        {
+            // send key press signal to jump out of any waiting cvWaitKey's
+            g_cond_broadcast( cond_have_key );
+        }
+        else
+        {
 #endif
+            // Some GTK+ modules (like the Unity module) use GDBusConnection,
+            // which has a habit of postponing cleanup by performing it via
+            // idle sources added to the main loop. Since this was the last window,
+            // we can assume that no event processing is going to happen in the
+            // nearest future, so we should force that cleanup (by handling all pending
+            // events) while we still have the chance.
+            // This is not needed if thread_started is true, because the background
+            // thread will process events continuously.
+            while( gtk_events_pending() )
+                gtk_main_iteration();
+#ifdef HAVE_GTHREAD
+        }
+#endif
+    }
 }
 
 
@@ -1567,6 +1628,80 @@ CV_IMPL void cvSetTrackbarPos( const char* trackbar_name, const char* window_nam
 }
 
 
+CV_IMPL void cvSetTrackbarMax(const char* trackbar_name, const char* window_name, int maxval)
+{
+    CV_FUNCNAME("cvSetTrackbarMax");
+
+    __BEGIN__;
+
+    if (maxval >= 0)
+    {
+        CvWindow* window = 0;
+        CvTrackbar* trackbar = 0;
+
+        if (trackbar_name == 0 || window_name == 0)
+        {
+            CV_ERROR( CV_StsNullPtr, "NULL trackbar or window name");
+        }
+
+        window = icvFindWindowByName( window_name );
+        if (window)
+        {
+            trackbar = icvFindTrackbarByName(window, trackbar_name);
+            if (trackbar)
+            {
+                trackbar->maxval = (trackbar->minval>maxval)?trackbar->minval:maxval;
+
+                CV_LOCK_MUTEX();
+
+                gtk_range_set_range(GTK_RANGE(trackbar->widget), 0, trackbar->maxval);
+
+                CV_UNLOCK_MUTEX();
+            }
+        }
+    }
+
+    __END__;
+}
+
+
+CV_IMPL void cvSetTrackbarMin(const char* trackbar_name, const char* window_name, int minval)
+{
+    CV_FUNCNAME("cvSetTrackbarMin");
+
+    __BEGIN__;
+
+    if (minval >= 0)
+    {
+        CvWindow* window = 0;
+        CvTrackbar* trackbar = 0;
+
+        if (trackbar_name == 0 || window_name == 0)
+        {
+            CV_ERROR( CV_StsNullPtr, "NULL trackbar or window name");
+        }
+
+        window = icvFindWindowByName( window_name );
+        if (window)
+        {
+            trackbar = icvFindTrackbarByName(window, trackbar_name);
+            if (trackbar)
+            {
+                trackbar->minval = (minval<trackbar->maxval)?minval:trackbar->maxval;
+
+                CV_LOCK_MUTEX();
+
+                gtk_range_set_range(GTK_RANGE(trackbar->widget), minval, trackbar->maxval);
+
+                CV_UNLOCK_MUTEX();
+            }
+        }
+    }
+
+    __END__;
+}
+
+
 CV_IMPL void* cvGetWindowHandle( const char* window_name )
 {
     void* widget = 0;
@@ -1612,17 +1747,109 @@ CV_IMPL const char* cvGetWindowName( void* window_handle )
     return window_name;
 }
 
+static GtkFileFilter* icvMakeGtkFilter(const char* name, const char* patterns, GtkFileFilter* images)
+{
+    GtkFileFilter* filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, name);
+
+    while(patterns[0])
+    {
+        gtk_file_filter_add_pattern(filter, patterns);
+        gtk_file_filter_add_pattern(images, patterns);
+        patterns += strlen(patterns) + 1;
+    }
+
+    return filter;
+}
+
+static void icvShowSaveAsDialog(GtkWidget* widget, CvWindow* window)
+{
+    if (!window || !widget)
+        return;
+
+    CvImageWidget* image_widget = CV_IMAGE_WIDGET(window->widget);
+    if (!image_widget || !image_widget->original_image)
+        return;
+
+    GtkWidget* dialog = gtk_file_chooser_dialog_new("Save As...",
+                      GTK_WINDOW(widget),
+                      GTK_FILE_CHOOSER_ACTION_SAVE,
+                      GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
+                      GTK_STOCK_SAVE, GTK_RESPONSE_ACCEPT,
+                      NULL);
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+
+    cv::String sname = gtk_window_get_title(GTK_WINDOW(window->frame));
+    sname = sname.substr(sname.find_last_of("\\/") + 1) + ".png";
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), sname.c_str());
+
+    GtkFileFilter* filter_all = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter_all, "All Files");
+    gtk_file_filter_add_pattern(filter_all, "*");
+
+    GtkFileFilter* filter_images = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter_images, "All Images");
+
+    GtkFileFilter* file_filters[] = {
+        icvMakeGtkFilter("Portable Network Graphics files (*.png)",               "*.png\0",                             filter_images),
+        icvMakeGtkFilter("JPEG files (*.jpeg;*.jpg;*.jpe)",                       "*.jpeg\0*.jpg\0*.jpe\0",              filter_images),
+        icvMakeGtkFilter("Windows bitmap (*.bmp;*.dib)",                          "*.bmp\0*.dib\0",                      filter_images),
+        icvMakeGtkFilter("TIFF Files (*.tiff;*.tif)",                             "*.tiff\0*.tif\0",                     filter_images),
+        icvMakeGtkFilter("JPEG-2000 files (*.jp2)",                               "*.jp2\0",                             filter_images),
+        icvMakeGtkFilter("WebP files (*.webp)",                                   "*.webp\0",                            filter_images),
+        icvMakeGtkFilter("Portable image format (*.pbm;*.pgm;*.ppm;*.pxm;*.pnm)", "*.pbm\0*.pgm\0*.ppm\0*.pxm\0*.pnm\0", filter_images),
+        icvMakeGtkFilter("OpenEXR Image files (*.exr)",                           "*.exr\0",                             filter_images),
+        icvMakeGtkFilter("Radiance HDR (*.hdr;*.pic)",                            "*.hdr\0*.pic\0",                      filter_images),
+        icvMakeGtkFilter("Sun raster files (*.sr;*.ras)",                         "*.sr\0*.ras\0",                       filter_images),
+        filter_images,
+        filter_all
+    };
+
+    for (size_t idx = 0; idx < sizeof(file_filters)/sizeof(file_filters[0]); ++idx)
+        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), file_filters[idx]);
+    gtk_file_chooser_set_filter(GTK_FILE_CHOOSER(dialog), filter_images);
+
+    cv::String filename;
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT)
+    {
+        char* fname = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        filename = fname;
+        g_free(fname);
+    }
+    gtk_widget_destroy(dialog);
+
+    if (!filename.empty())
+    {
+        cv::Mat bgr;
+        cv::cvtColor(cv::cvarrToMat(image_widget->original_image), bgr, cv::COLOR_RGB2BGR);
+        cv::imwrite(filename, bgr);
+    }
+}
+
 #if defined (GTK_VERSION3)
 #define GDK_Escape GDK_KEY_Escape
 #define GDK_Return GDK_KEY_Return
 #define GDK_Linefeed GDK_KEY_Linefeed
 #define GDK_Tab GDK_KEY_Tab
+#define GDK_s GDK_KEY_s
+#define GDK_S GDK_KEY_S
 #endif //GTK_VERSION3
 
-static gboolean icvOnKeyPress( GtkWidget * /*widget*/,
-                GdkEventKey* event, gpointer /*user_data*/ )
+static gboolean icvOnKeyPress(GtkWidget* widget, GdkEventKey* event, gpointer user_data)
 {
     int code = 0;
+
+    if ( BIT_ALLIN(event->state, GDK_CONTROL_MASK) && (event->keyval == GDK_s || event->keyval == GDK_S))
+    {
+        try
+        {
+            icvShowSaveAsDialog(widget, (CvWindow*)user_data);
+        }
+        catch(...)
+        {
+            // suppress all exceptions here
+        }
+    }
 
     switch( event->keyval )
     {
@@ -1696,7 +1923,7 @@ static gboolean icvOnMouse( GtkWidget *widget, GdkEvent *event, gpointer user_da
     CvWindow* window = (CvWindow*)user_data;
     CvPoint2D32f pt32f(-1., -1.);
     CvPoint pt(-1,-1);
-    int cv_event = -1, state = 0;
+    int cv_event = -1, state = 0, flags = 0;
     CvImageWidget * image_widget = CV_IMAGE_WIDGET( widget );
 
     if( window->signature != CV_WINDOW_MAGIC_VAL ||
@@ -1742,12 +1969,40 @@ static gboolean icvOnMouse( GtkWidget *widget, GdkEvent *event, gpointer user_da
         }
         state = event_button->state;
     }
+    else if( event->type == GDK_SCROLL )
+    {
+#if defined(GTK_VERSION3_4)
+        // NOTE: in current implementation doesn't possible to put into callback function delta_x and delta_y separetely
+        double delta = (event->scroll.delta_x + event->scroll.delta_y);
+        cv_event   = (event->scroll.delta_y!=0) ? CV_EVENT_MOUSEHWHEEL : CV_EVENT_MOUSEWHEEL;
+#else
+        cv_event = CV_EVENT_MOUSEWHEEL;
+#endif //GTK_VERSION3_4
 
-    if( cv_event >= 0 ){
+        state    = event->scroll.state;
+
+        switch(event->scroll.direction) {
+#if defined(GTK_VERSION3_4)
+        case GDK_SCROLL_SMOOTH: flags |= (((int)delta << 16));
+            break;
+#endif //GTK_VERSION3_4
+        case GDK_SCROLL_LEFT:  cv_event = CV_EVENT_MOUSEHWHEEL;
+        case GDK_SCROLL_UP:    flags |= ~0xffff;
+            break;
+        case GDK_SCROLL_RIGHT: cv_event = CV_EVENT_MOUSEHWHEEL;
+        case GDK_SCROLL_DOWN:  flags |= (((int)1 << 16));
+            break;
+        default: ;
+        };
+    }
+
+    if( cv_event >= 0 )
+    {
         // scale point if image is scaled
         if( (image_widget->flags & CV_WINDOW_AUTOSIZE)==0 &&
              image_widget->original_image &&
-             image_widget->scaled_image ){
+             image_widget->scaled_image )
+        {
             // image origin is not necessarily at (0,0)
 #if defined (GTK_VERSION3)
             int x0 = (gtk_widget_get_allocated_width(widget) - image_widget->scaled_image->cols)/2;
@@ -1761,25 +2016,27 @@ static gboolean icvOnMouse( GtkWidget *widget, GdkEvent *event, gpointer user_da
             pt.y = cvFloor( ((pt32f.y-y0)*image_widget->original_image->rows)/
                                             image_widget->scaled_image->rows );
         }
-        else{
+        else
+        {
             pt = cvPointFrom32f( pt32f );
         }
 
 //        if((unsigned)pt.x < (unsigned)(image_widget->original_image->width) &&
 //           (unsigned)pt.y < (unsigned)(image_widget->original_image->height) )
         {
-            int flags = (state & GDK_SHIFT_MASK ? CV_EVENT_FLAG_SHIFTKEY : 0) |
-                (state & GDK_CONTROL_MASK ? CV_EVENT_FLAG_CTRLKEY : 0) |
-                (state & (GDK_MOD1_MASK|GDK_MOD2_MASK) ? CV_EVENT_FLAG_ALTKEY : 0) |
-                (state & GDK_BUTTON1_MASK ? CV_EVENT_FLAG_LBUTTON : 0) |
-                (state & GDK_BUTTON2_MASK ? CV_EVENT_FLAG_MBUTTON : 0) |
-                (state & GDK_BUTTON3_MASK ? CV_EVENT_FLAG_RBUTTON : 0);
+            flags |= BIT_MAP(state, GDK_SHIFT_MASK,   CV_EVENT_FLAG_SHIFTKEY) |
+                BIT_MAP(state, GDK_CONTROL_MASK, CV_EVENT_FLAG_CTRLKEY)  |
+                BIT_MAP(state, GDK_MOD1_MASK,    CV_EVENT_FLAG_ALTKEY)   |
+                BIT_MAP(state, GDK_MOD2_MASK,    CV_EVENT_FLAG_ALTKEY)   |
+                BIT_MAP(state, GDK_BUTTON1_MASK, CV_EVENT_FLAG_LBUTTON)  |
+                BIT_MAP(state, GDK_BUTTON2_MASK, CV_EVENT_FLAG_MBUTTON)  |
+                BIT_MAP(state, GDK_BUTTON3_MASK, CV_EVENT_FLAG_RBUTTON);
             window->on_mouse( cv_event, pt.x, pt.y, flags, window->on_mouse_param );
         }
     }
 
-        return FALSE;
-    }
+    return FALSE;
+}
 
 
 static gboolean icvAlarm( gpointer user_data )

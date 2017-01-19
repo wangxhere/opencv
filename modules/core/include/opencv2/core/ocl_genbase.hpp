@@ -39,13 +39,15 @@
 //
 //M*/
 
-#ifndef __OPENCV_OPENCL_GENBASE_HPP__
-#define __OPENCV_OPENCL_GENBASE_HPP__
+#ifndef OPENCV_OPENCL_GENBASE_HPP
+#define OPENCV_OPENCL_GENBASE_HPP
 
 namespace cv
 {
 namespace ocl
 {
+
+//! @cond IGNORED
 
 struct ProgramEntry
 {
@@ -53,6 +55,8 @@ struct ProgramEntry
     const char* programStr;
     const char* programHash;
 };
+
+//! @endcond
 
 }
 }

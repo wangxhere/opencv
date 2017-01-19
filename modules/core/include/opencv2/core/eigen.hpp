@@ -42,8 +42,8 @@
 //M*/
 
 
-#ifndef __OPENCV_CORE_EIGEN_HPP__
-#define __OPENCV_CORE_EIGEN_HPP__
+#ifndef OPENCV_CORE_EIGEN_HPP
+#define OPENCV_CORE_EIGEN_HPP
 
 #include "opencv2/core.hpp"
 
@@ -55,6 +55,9 @@
 
 namespace cv
 {
+
+//! @addtogroup core_eigen
+//! @{
 
 template<typename _Tp, int _rows, int _cols, int _options, int _maxRows, int _maxCols> static inline
 void eigen2cv( const Eigen::Matrix<_Tp, _rows, _cols, _options, _maxRows, _maxCols>& src, Mat& dst )
@@ -269,6 +272,8 @@ void cv2eigen( const Matx<_Tp, 1, _cols>& src,
         Mat(src).copyTo(_dst);
     }
 }
+
+//! @}
 
 } // cv
 

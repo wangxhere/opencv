@@ -67,10 +67,11 @@ class CvCapture_Images : public CvCapture
 public:
     CvCapture_Images()
     {
-        filename = 0;
+        filename = NULL;
         currentframe = firstframe = 0;
         length = 0;
-        frame = 0;
+        frame = NULL;
+        grabbedInOpen = false;
     }
 
     virtual ~CvCapture_Images()
@@ -80,7 +81,7 @@ public:
 
     virtual bool open(const char* _filename);
     virtual void close();
-    virtual double getProperty(int);
+    virtual double getProperty(int) const;
     virtual bool setProperty(int, double);
     virtual bool grabFrame();
     virtual IplImage* retrieveFrame(int);
@@ -92,6 +93,7 @@ protected:
     unsigned length; // length of sequence
 
     IplImage* frame;
+    bool grabbedInOpen;
 };
 
 
@@ -100,7 +102,7 @@ void CvCapture_Images::close()
     if( filename )
     {
         free(filename);
-        filename = 0;
+        filename = NULL;
     }
     currentframe = firstframe = 0;
     length = 0;
@@ -113,20 +115,28 @@ bool CvCapture_Images::grabFrame()
     char str[_MAX_PATH];
     sprintf(str, filename, firstframe + currentframe);
 
+    if (grabbedInOpen)
+    {
+        grabbedInOpen = false;
+        ++currentframe;
+
+        return frame != NULL;
+    }
+
     cvReleaseImage(&frame);
-    frame = cvLoadImage(str, CV_LOAD_IMAGE_ANYDEPTH | CV_LOAD_IMAGE_ANYCOLOR);
+    frame = cvLoadImage(str, CV_LOAD_IMAGE_UNCHANGED);
     if( frame )
         currentframe++;
 
-    return frame != 0;
+    return frame != NULL;
 }
 
 IplImage* CvCapture_Images::retrieveFrame(int)
 {
-    return frame;
+    return grabbedInOpen ? NULL : frame;
 }
 
-double CvCapture_Images::getProperty(int id)
+double CvCapture_Images::getProperty(int id) const
 {
     switch(id)
     {
@@ -135,6 +145,8 @@ double CvCapture_Images::getProperty(int id)
         return 0;
     case CV_CAP_PROP_POS_FRAMES:
         return currentframe;
+    case CV_CAP_PROP_FRAME_COUNT:
+        return length;
     case CV_CAP_PROP_POS_AVI_RATIO:
         return (double)currentframe / (double)(length - 1);
     case CV_CAP_PROP_FRAME_WIDTH:
@@ -166,6 +178,8 @@ bool CvCapture_Images::setProperty(int id, double value)
             value = length - 1;
         }
         currentframe = cvRound(value);
+        if (currentframe != 0)
+            grabbedInOpen = false; // grabbed frame is not valid anymore
         return true;
     case CV_CAP_PROP_POS_AVI_RATIO:
         if(value > 1) {
@@ -176,6 +190,8 @@ bool CvCapture_Images::setProperty(int id, double value)
             value = 0;
         }
         currentframe = cvRound((length - 1) * value);
+        if (currentframe != 0)
+            grabbedInOpen = false; // grabbed frame is not valid anymore
         return true;
     }
     CV_WARN("unknown/unhandled property\n");
@@ -278,7 +294,13 @@ bool CvCapture_Images::open(const char * _filename)
     }
 
     firstframe = offset;
-    return true;
+
+    // grab frame to enable properties retrieval
+    bool grabRes = grabFrame();
+    grabbedInOpen = true;
+    currentframe = 0;
+
+    return grabRes;
 }
 
 
@@ -290,7 +312,7 @@ CvCapture* cvCreateFileCapture_Images(const char * filename)
         return capture;
 
     delete capture;
-    return 0;
+    return NULL;
 }
 
 //
@@ -310,18 +332,23 @@ public:
 
     virtual bool open( const char* _filename );
     virtual void close();
+    virtual bool setProperty( int, double );
     virtual bool writeFrame( const IplImage* );
 
 protected:
     char* filename;
     unsigned currentframe;
+    std::vector<int> params;
 };
 
 bool CvVideoWriter_Images::writeFrame( const IplImage* image )
 {
     char str[_MAX_PATH];
     sprintf(str, filename, currentframe);
-    int ret = cvSaveImage(str, image);
+    std::vector<int> image_params = params;
+    image_params.push_back(0); // append parameters 'stop' mark
+    image_params.push_back(0);
+    int ret = cvSaveImage(str, image, &image_params[0]);
 
     currentframe++;
 
@@ -336,6 +363,7 @@ void CvVideoWriter_Images::close()
         filename = 0;
     }
     currentframe = 0;
+    params.clear();
 }
 
 
@@ -358,7 +386,20 @@ bool CvVideoWriter_Images::open( const char* _filename )
     }
 
     currentframe = offset;
+    params.clear();
     return true;
+}
+
+
+bool CvVideoWriter_Images::setProperty( int id, double value )
+{
+    if (id >= cv::CAP_PROP_IMAGES_BASE && id < cv::CAP_PROP_IMAGES_LAST)
+    {
+        params.push_back( id - cv::CAP_PROP_IMAGES_BASE );
+        params.push_back( static_cast<int>( value ) );
+        return true;
+    }
+    return false; // not supported
 }
 
 

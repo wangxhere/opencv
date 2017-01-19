@@ -52,6 +52,7 @@
 
 #include "precomp.hpp"
 #include <limits.h>
+#include "opencv2/core/hal/intrin.hpp"
 
 namespace cv
 {
@@ -110,7 +111,7 @@ struct StereoSGBMParams
 };
 
 /*
- For each pixel row1[x], max(-maxD, 0) <= minX <= x < maxX <= width - max(0, -minD),
+ For each pixel row1[x], max(maxD, 0) <= minX <= x < maxX <= width - max(0, -minD),
  and for each disparity minD<=d<maxD the function
  computes the cost (cost[(x-minX)*(maxD - minD) + (d - minD)]), depending on the difference between
  row1[x] and row2[x-d]. The subpixel algorithm from
@@ -125,11 +126,14 @@ static void calcPixelCostBT( const Mat& img1, const Mat& img2, int y,
                             int tabOfs, int )
 {
     int x, c, width = img1.cols, cn = img1.channels();
-    int minX1 = std::max(-maxD, 0), maxX1 = width + std::min(minD, 0);
+    int minX1 = std::max(maxD, 0), maxX1 = width + std::min(minD, 0);
     int minX2 = std::max(minX1 - maxD, 0), maxX2 = std::min(maxX1 - minD, width);
     int D = maxD - minD, width1 = maxX1 - minX1, width2 = maxX2 - minX2;
     const PixType *row1 = img1.ptr<PixType>(y), *row2 = img2.ptr<PixType>(y);
     PixType *prow1 = buffer + width2*2, *prow2 = prow1 + width*cn*2;
+#if CV_SIMD128
+    bool useSIMD = hasSIMD128();
+#endif
 
     tab += tabOfs;
 
@@ -180,11 +184,6 @@ static void calcPixelCostBT( const Mat& img1, const Mat& img2, int y,
     buffer -= minX2;
     cost -= minX1*D + minD; // simplify the cost indices inside the loop
 
-#if CV_SSE2
-    volatile bool useSIMD = checkHardwareSupport(CV_CPU_SSE2);
-#endif
-
-#if 1
     for( c = 0; c < cn*2; c++, prow1 += width, prow2 += width )
     {
         int diff_scale = c < cn ? 0 : 2;
@@ -211,27 +210,28 @@ static void calcPixelCostBT( const Mat& img1, const Mat& img2, int y,
             int u0 = std::min(ul, ur); u0 = std::min(u0, u);
             int u1 = std::max(ul, ur); u1 = std::max(u1, u);
 
-        #if CV_SSE2
+        #if CV_SIMD128
             if( useSIMD )
             {
-                __m128i _u = _mm_set1_epi8((char)u), _u0 = _mm_set1_epi8((char)u0);
-                __m128i _u1 = _mm_set1_epi8((char)u1), z = _mm_setzero_si128();
-                __m128i ds = _mm_cvtsi32_si128(diff_scale);
+                v_uint8x16 _u  = v_setall_u8((uchar)u), _u0 = v_setall_u8((uchar)u0);
+                v_uint8x16 _u1 = v_setall_u8((uchar)u1);
 
                 for( int d = minD; d < maxD; d += 16 )
                 {
-                    __m128i _v = _mm_loadu_si128((const __m128i*)(prow2 + width-x-1 + d));
-                    __m128i _v0 = _mm_loadu_si128((const __m128i*)(buffer + width-x-1 + d));
-                    __m128i _v1 = _mm_loadu_si128((const __m128i*)(buffer + width-x-1 + d + width2));
-                    __m128i c0 = _mm_max_epu8(_mm_subs_epu8(_u, _v1), _mm_subs_epu8(_v0, _u));
-                    __m128i c1 = _mm_max_epu8(_mm_subs_epu8(_v, _u1), _mm_subs_epu8(_u0, _v));
-                    __m128i diff = _mm_min_epu8(c0, c1);
+                    v_uint8x16 _v  = v_load(prow2  + width-x-1 + d);
+                    v_uint8x16 _v0 = v_load(buffer + width-x-1 + d);
+                    v_uint8x16 _v1 = v_load(buffer + width-x-1 + d + width2);
+                    v_uint8x16 c0 = v_max(_u - _v1, _v0 - _u);
+                    v_uint8x16 c1 = v_max(_v - _u1, _u0 - _v);
+                    v_uint8x16 diff = v_min(c0, c1);
 
-                    c0 = _mm_load_si128((__m128i*)(cost + x*D + d));
-                    c1 = _mm_load_si128((__m128i*)(cost + x*D + d + 8));
+                    v_int16x8 _c0 = v_load_aligned(cost + x*D + d);
+                    v_int16x8 _c1 = v_load_aligned(cost + x*D + d + 8);
 
-                    _mm_store_si128((__m128i*)(cost + x*D + d), _mm_adds_epi16(c0, _mm_srl_epi16(_mm_unpacklo_epi8(diff,z), ds)));
-                    _mm_store_si128((__m128i*)(cost + x*D + d + 8), _mm_adds_epi16(c1, _mm_srl_epi16(_mm_unpackhi_epi8(diff,z), ds)));
+                    v_uint16x8 diff1,diff2;
+                    v_expand(diff,diff1,diff2);
+                    v_store_aligned(cost + x*D + d,     _c0 + v_reinterpret_as_s16(diff1 >> diff_scale));
+                    v_store_aligned(cost + x*D + d + 8, _c1 + v_reinterpret_as_s16(diff2 >> diff_scale));
                 }
             }
             else
@@ -250,40 +250,6 @@ static void calcPixelCostBT( const Mat& img1, const Mat& img2, int y,
             }
         }
     }
-#else
-    for( c = 0; c < cn*2; c++, prow1 += width, prow2 += width )
-    {
-        for( x = minX1; x < maxX1; x++ )
-        {
-            int u = prow1[x];
-        #if CV_SSE2
-            if( useSIMD )
-            {
-                __m128i _u = _mm_set1_epi8(u), z = _mm_setzero_si128();
-
-                for( int d = minD; d < maxD; d += 16 )
-                {
-                    __m128i _v = _mm_loadu_si128((const __m128i*)(prow2 + width-1-x + d));
-                    __m128i diff = _mm_adds_epu8(_mm_subs_epu8(_u,_v), _mm_subs_epu8(_v,_u));
-                    __m128i c0 = _mm_load_si128((__m128i*)(cost + x*D + d));
-                    __m128i c1 = _mm_load_si128((__m128i*)(cost + x*D + d + 8));
-
-                    _mm_store_si128((__m128i*)(cost + x*D + d), _mm_adds_epi16(c0, _mm_unpacklo_epi8(diff,z)));
-                    _mm_store_si128((__m128i*)(cost + x*D + d + 8), _mm_adds_epi16(c1, _mm_unpackhi_epi8(diff,z)));
-                }
-            }
-            else
-        #endif
-            {
-                for( int d = minD; d < maxD; d++ )
-                {
-                    int v = prow2[width-1-x + d];
-                    cost[x*D + d] = (CostType)(cost[x*D + d] + (CostType)std::abs(u - v));
-                }
-            }
-        }
-    }
-#endif
 }
 
 
@@ -311,7 +277,8 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
                                  Mat& disp1, const StereoSGBMParams& params,
                                  Mat& buffer )
 {
-#if CV_SSE2
+#if CV_SIMD128
+    // maxDisparity is supposed to multiple of 16, so we can forget doing else
     static const uchar LSBTab[] =
     {
         0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
@@ -323,8 +290,9 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
         6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
         5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0
     };
+    static const v_uint16x8 v_LSB = v_uint16x8(0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80);
 
-    volatile bool useSIMD = checkHardwareSupport(CV_CPU_SSE2);
+    bool useSIMD = hasSIMD128();
 #endif
 
     const int ALIGN = 16;
@@ -340,7 +308,7 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
     int disp12MaxDiff = params.disp12MaxDiff > 0 ? params.disp12MaxDiff : 1;
     int P1 = params.P1 > 0 ? params.P1 : 2, P2 = std::max(params.P2 > 0 ? params.P2 : 5, P1+1);
     int k, width = disp1.cols, height = disp1.rows;
-    int minX1 = std::max(-maxD, 0), maxX1 = width + std::min(minD, 0);
+    int minX1 = std::max(maxD, 0), maxX1 = width + std::min(minD, 0);
     int D = maxD - minD, width1 = maxX1 - minX1;
     int INVALID_DISP = minD - 1, INVALID_DISP_SCALED = INVALID_DISP*DISP_SCALE;
     int SW2 = SADWindowSize.width/2, SH2 = SADWindowSize.height/2;
@@ -398,7 +366,7 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
     PixType* tempBuf = (PixType*)(disp2ptr + width);
 
     // add P2 to every C(x,y). it saves a few operations in the inner loops
-    for( k = 0; k < width1*D; k++ )
+    for(k = 0; k < (int)CSBufSize; k++ )
         Cbuf[k] = (CostType)P2;
 
     for( int pass = 1; pass <= npasses; pass++ )
@@ -468,21 +436,20 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
                                 const CostType* pixAdd = pixDiff + std::min(x + SW2*D, (width1-1)*D);
                                 const CostType* pixSub = pixDiff + std::max(x - (SW2+1)*D, 0);
 
-                            #if CV_SSE2
+                            #if CV_SIMD128
                                 if( useSIMD )
                                 {
                                     for( d = 0; d < D; d += 8 )
                                     {
-                                        __m128i hv = _mm_load_si128((const __m128i*)(hsumAdd + x - D + d));
-                                        __m128i Cx = _mm_load_si128((__m128i*)(Cprev + x + d));
-                                        hv = _mm_adds_epi16(_mm_subs_epi16(hv,
-                                                                           _mm_load_si128((const __m128i*)(pixSub + d))),
-                                                            _mm_load_si128((const __m128i*)(pixAdd + d)));
-                                        Cx = _mm_adds_epi16(_mm_subs_epi16(Cx,
-                                                                           _mm_load_si128((const __m128i*)(hsumSub + x + d))),
-                                                            hv);
-                                        _mm_store_si128((__m128i*)(hsumAdd + x + d), hv);
-                                        _mm_store_si128((__m128i*)(C + x + d), Cx);
+                                        v_int16x8 hv = v_load(hsumAdd + x - D + d);
+                                        v_int16x8 Cx = v_load(Cprev + x + d);
+                                        v_int16x8 psub = v_load(pixSub + d);
+                                        v_int16x8 padd = v_load(pixAdd + d);
+                                        hv = (hv - psub + padd);
+                                        psub = v_load(hsumSub + x + d);
+                                        Cx = Cx - psub + hv;
+                                        v_store(hsumAdd + x + d, hv);
+                                        v_store(C + x + d, Cx);
                                     }
                                 }
                                 else
@@ -565,73 +532,79 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
                 const CostType* Cp = C + x*D;
                 CostType* Sp = S + x*D;
 
-            #if CV_SSE2
+            #if CV_SIMD128
                 if( useSIMD )
                 {
-                    __m128i _P1 = _mm_set1_epi16((short)P1);
+                    v_int16x8 _P1 = v_setall_s16((short)P1);
 
-                    __m128i _delta0 = _mm_set1_epi16((short)delta0);
-                    __m128i _delta1 = _mm_set1_epi16((short)delta1);
-                    __m128i _delta2 = _mm_set1_epi16((short)delta2);
-                    __m128i _delta3 = _mm_set1_epi16((short)delta3);
-                    __m128i _minL0 = _mm_set1_epi16((short)MAX_COST);
+                    v_int16x8 _delta0 = v_setall_s16((short)delta0);
+                    v_int16x8 _delta1 = v_setall_s16((short)delta1);
+                    v_int16x8 _delta2 = v_setall_s16((short)delta2);
+                    v_int16x8 _delta3 = v_setall_s16((short)delta3);
+                    v_int16x8 _minL0 = v_setall_s16((short)MAX_COST);
 
                     for( d = 0; d < D; d += 8 )
                     {
-                        __m128i Cpd = _mm_load_si128((const __m128i*)(Cp + d));
-                        __m128i L0, L1, L2, L3;
+                        v_int16x8 Cpd = v_load(Cp + d);
+                        v_int16x8 L0, L1, L2, L3;
 
-                        L0 = _mm_load_si128((const __m128i*)(Lr_p0 + d));
-                        L1 = _mm_load_si128((const __m128i*)(Lr_p1 + d));
-                        L2 = _mm_load_si128((const __m128i*)(Lr_p2 + d));
-                        L3 = _mm_load_si128((const __m128i*)(Lr_p3 + d));
+                        L0 = v_load(Lr_p0 + d);
+                        L1 = v_load(Lr_p1 + d);
+                        L2 = v_load(Lr_p2 + d);
+                        L3 = v_load(Lr_p3 + d);
 
-                        L0 = _mm_min_epi16(L0, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p0 + d - 1)), _P1));
-                        L0 = _mm_min_epi16(L0, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p0 + d + 1)), _P1));
+                        L0 = v_min(L0, (v_load(Lr_p0 + d - 1) + _P1));
+                        L0 = v_min(L0, (v_load(Lr_p0 + d + 1) + _P1));
 
-                        L1 = _mm_min_epi16(L1, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p1 + d - 1)), _P1));
-                        L1 = _mm_min_epi16(L1, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p1 + d + 1)), _P1));
+                        L1 = v_min(L1, (v_load(Lr_p1 + d - 1) + _P1));
+                        L1 = v_min(L1, (v_load(Lr_p1 + d + 1) + _P1));
 
-                        L2 = _mm_min_epi16(L2, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p2 + d - 1)), _P1));
-                        L2 = _mm_min_epi16(L2, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p2 + d + 1)), _P1));
+                        L2 = v_min(L2, (v_load(Lr_p2 + d - 1) + _P1));
+                        L2 = v_min(L2, (v_load(Lr_p2 + d + 1) + _P1));
 
-                        L3 = _mm_min_epi16(L3, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p3 + d - 1)), _P1));
-                        L3 = _mm_min_epi16(L3, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p3 + d + 1)), _P1));
+                        L3 = v_min(L3, (v_load(Lr_p3 + d - 1) + _P1));
+                        L3 = v_min(L3, (v_load(Lr_p3 + d + 1) + _P1));
 
-                        L0 = _mm_min_epi16(L0, _delta0);
-                        L0 = _mm_adds_epi16(_mm_subs_epi16(L0, _delta0), Cpd);
+                        L0 = v_min(L0, _delta0);
+                        L0 = ((L0 - _delta0) + Cpd);
 
-                        L1 = _mm_min_epi16(L1, _delta1);
-                        L1 = _mm_adds_epi16(_mm_subs_epi16(L1, _delta1), Cpd);
+                        L1 = v_min(L1, _delta1);
+                        L1 = ((L1 - _delta1) + Cpd);
 
-                        L2 = _mm_min_epi16(L2, _delta2);
-                        L2 = _mm_adds_epi16(_mm_subs_epi16(L2, _delta2), Cpd);
+                        L2 = v_min(L2, _delta2);
+                        L2 = ((L2 - _delta2) + Cpd);
 
-                        L3 = _mm_min_epi16(L3, _delta3);
-                        L3 = _mm_adds_epi16(_mm_subs_epi16(L3, _delta3), Cpd);
+                        L3 = v_min(L3, _delta3);
+                        L3 = ((L3 - _delta3) + Cpd);
 
-                        _mm_store_si128( (__m128i*)(Lr_p + d), L0);
-                        _mm_store_si128( (__m128i*)(Lr_p + d + D2), L1);
-                        _mm_store_si128( (__m128i*)(Lr_p + d + D2*2), L2);
-                        _mm_store_si128( (__m128i*)(Lr_p + d + D2*3), L3);
+                        v_store(Lr_p + d, L0);
+                        v_store(Lr_p + d + D2, L1);
+                        v_store(Lr_p + d + D2*2, L2);
+                        v_store(Lr_p + d + D2*3, L3);
 
-                        __m128i t0 = _mm_min_epi16(_mm_unpacklo_epi16(L0, L2), _mm_unpackhi_epi16(L0, L2));
-                        __m128i t1 = _mm_min_epi16(_mm_unpacklo_epi16(L1, L3), _mm_unpackhi_epi16(L1, L3));
-                        t0 = _mm_min_epi16(_mm_unpacklo_epi16(t0, t1), _mm_unpackhi_epi16(t0, t1));
-                        _minL0 = _mm_min_epi16(_minL0, t0);
+                        // Get minimum from in L0-L3
+                        v_int16x8 t02L, t02H, t13L, t13H, t0123L, t0123H;
+                        v_zip(L0, L2, t02L, t02H);            // L0[0] L2[0] L0[1] L2[1]...
+                        v_zip(L1, L3, t13L, t13H);            // L1[0] L3[0] L1[1] L3[1]...
+                        v_int16x8 t02 = v_min(t02L, t02H);    // L0[i] L2[i] L0[i] L2[i]...
+                        v_int16x8 t13 = v_min(t13L, t13H);    // L1[i] L3[i] L1[i] L3[i]...
+                        v_zip(t02, t13, t0123L, t0123H);      // L0[i] L1[i] L2[i] L3[i]...
+                        v_int16x8 t0 = v_min(t0123L, t0123H);
+                        _minL0 = v_min(_minL0, t0);
 
-                        __m128i Sval = _mm_load_si128((const __m128i*)(Sp + d));
+                        v_int16x8 Sval = v_load(Sp + d);
 
-                        L0 = _mm_adds_epi16(L0, L1);
-                        L2 = _mm_adds_epi16(L2, L3);
-                        Sval = _mm_adds_epi16(Sval, L0);
-                        Sval = _mm_adds_epi16(Sval, L2);
+                        L0 = L0 + L1;
+                        L2 = L2 + L3;
+                        Sval = Sval + L0;
+                        Sval = Sval + L2;
 
-                        _mm_store_si128((__m128i*)(Sp + d), Sval);
+                        v_store(Sp + d, Sval);
                     }
 
-                    _minL0 = _mm_min_epi16(_minL0, _mm_srli_si128(_minL0, 8));
-                    _mm_storel_epi64((__m128i*)&minLr[0][xm], _minL0);
+                    v_int32x4 minL, minH;
+                    v_expand(_minL0, minL, minH);
+                    v_pack_store(&minLr[0][xm], v_min(minL, minH));
                 }
                 else
             #endif
@@ -693,55 +666,54 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
 
                         const CostType* Cp = C + x*D;
 
-                    #if CV_SSE2
+                    #if CV_SIMD128
                         if( useSIMD )
                         {
-                            __m128i _P1 = _mm_set1_epi16((short)P1);
-                            __m128i _delta0 = _mm_set1_epi16((short)delta0);
+                            v_int16x8 _P1 = v_setall_s16((short)P1);
+                            v_int16x8 _delta0 = v_setall_s16((short)delta0);
 
-                            __m128i _minL0 = _mm_set1_epi16((short)minL0);
-                            __m128i _minS = _mm_set1_epi16(MAX_COST), _bestDisp = _mm_set1_epi16(-1);
-                            __m128i _d8 = _mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7), _8 = _mm_set1_epi16(8);
+                            v_int16x8 _minL0 = v_setall_s16((short)minL0);
+                            v_int16x8 _minS = v_setall_s16(MAX_COST), _bestDisp = v_setall_s16(-1);
+                            v_int16x8 _d8 = v_int16x8(0, 1, 2, 3, 4, 5, 6, 7), _8 = v_setall_s16(8);
 
                             for( d = 0; d < D; d += 8 )
                             {
-                                __m128i Cpd = _mm_load_si128((const __m128i*)(Cp + d)), L0;
+                                v_int16x8 Cpd = v_load(Cp + d);
+                                v_int16x8 L0 = v_load(Lr_p0 + d);
 
-                                L0 = _mm_load_si128((const __m128i*)(Lr_p0 + d));
-                                L0 = _mm_min_epi16(L0, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p0 + d - 1)), _P1));
-                                L0 = _mm_min_epi16(L0, _mm_adds_epi16(_mm_loadu_si128((const __m128i*)(Lr_p0 + d + 1)), _P1));
-                                L0 = _mm_min_epi16(L0, _delta0);
-                                L0 = _mm_adds_epi16(_mm_subs_epi16(L0, _delta0), Cpd);
+                                L0 = v_min(L0, v_load(Lr_p0 + d - 1) + _P1);
+                                L0 = v_min(L0, v_load(Lr_p0 + d + 1) + _P1);
+                                L0 = v_min(L0, _delta0);
+                                L0 = L0 - _delta0 + Cpd;
 
-                                _mm_store_si128((__m128i*)(Lr_p + d), L0);
-                                _minL0 = _mm_min_epi16(_minL0, L0);
-                                L0 = _mm_adds_epi16(L0, *(__m128i*)(Sp + d));
-                                _mm_store_si128((__m128i*)(Sp + d), L0);
+                                v_store(Lr_p + d, L0);
+                                _minL0 = v_min(_minL0, L0);
+                                L0 = L0 + v_load(Sp + d);
+                                v_store(Sp + d, L0);
 
-                                __m128i mask = _mm_cmpgt_epi16(_minS, L0);
-                                _minS = _mm_min_epi16(_minS, L0);
-                                _bestDisp = _mm_xor_si128(_bestDisp, _mm_and_si128(_mm_xor_si128(_bestDisp,_d8), mask));
-                                _d8 = _mm_adds_epi16(_d8, _8);
+                                v_int16x8 mask = _minS > L0;
+                                _minS = v_min(_minS, L0);
+                                _bestDisp = _bestDisp ^ ((_bestDisp ^ _d8) & mask);
+                                _d8 += _8;
                             }
+                            short bestDispBuf[8];
+                            v_store(bestDispBuf, _bestDisp);
 
-                            short CV_DECL_ALIGNED(16) bestDispBuf[8];
-                            _mm_store_si128((__m128i*)bestDispBuf, _bestDisp);
+                            v_int32x4 min32L, min32H;
+                            v_expand(_minL0, min32L, min32H);
+                            minLr[0][xm] = (CostType)std::min(v_reduce_min(min32L), v_reduce_min(min32H));
 
-                            _minL0 = _mm_min_epi16(_minL0, _mm_srli_si128(_minL0, 8));
-                            _minL0 = _mm_min_epi16(_minL0, _mm_srli_si128(_minL0, 4));
-                            _minL0 = _mm_min_epi16(_minL0, _mm_srli_si128(_minL0, 2));
+                            v_expand(_minS, min32L, min32H);
+                            minS = std::min(v_reduce_min(min32L), v_reduce_min(min32H));
 
-                            __m128i qS = _mm_min_epi16(_minS, _mm_srli_si128(_minS, 8));
-                            qS = _mm_min_epi16(qS, _mm_srli_si128(qS, 4));
-                            qS = _mm_min_epi16(qS, _mm_srli_si128(qS, 2));
+                            v_int16x8 ss = v_setall_s16((short)minS);
+                            v_uint16x8 minMask = v_reinterpret_as_u16(ss == _minS);
+                            v_uint16x8 minBit = minMask & v_LSB;
 
-                            minLr[0][xm] = (CostType)_mm_cvtsi128_si32(_minL0);
-                            minS = (CostType)_mm_cvtsi128_si32(qS);
+                            v_uint32x4 minBitL, minBitH;
+                            v_expand(minBit, minBitL, minBitH);
 
-                            qS = _mm_shuffle_epi32(_mm_unpacklo_epi16(qS, qS), 0);
-                            qS = _mm_cmpeq_epi16(_minS, qS);
-                            int idx = _mm_movemask_epi8(_mm_packs_epi16(qS, qS)) & 255;
-
+                            int idx = v_reduce_sum(minBitL) + v_reduce_sum(minBitH);
                             bestDisp = bestDispBuf[LSBTab[idx]];
                         }
                         else
@@ -766,13 +738,40 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
                     }
                     else
                     {
-                        for( d = 0; d < D; d++ )
+                    #if CV_SIMD128
+                        if( useSIMD )
                         {
-                            int Sval = Sp[d];
-                            if( Sval < minS )
+                            v_int16x8 _minS = v_setall_s16(MAX_COST), _bestDisp = v_setall_s16(-1);
+                            v_int16x8 _d8 = v_int16x8(0, 1, 2, 3, 4, 5, 6, 7), _8 = v_setall_s16(8);
+
+                            for( d = 0; d < D; d+= 8 )
                             {
-                                minS = Sval;
-                                bestDisp = d;
+                                v_int16x8 L0 = v_load(Sp + d);
+                                v_int16x8 mask = L0 < _minS;
+                                _minS = v_min( L0, _minS );
+                                _bestDisp = _bestDisp ^ ((_bestDisp ^ _d8) & mask);
+                                _d8 = _d8 + _8;
+                            }
+                            v_int32x4 _d0, _d1;
+                            v_expand(_minS, _d0, _d1);
+                            minS = (int)std::min(v_reduce_min(_d0), v_reduce_min(_d1));
+                            v_int16x8 v_mask = v_setall_s16((short)minS) == _minS;
+
+                            _bestDisp = (_bestDisp & v_mask) | (v_setall_s16(SHRT_MAX) & ~v_mask);
+                            v_expand(_bestDisp, _d0, _d1);
+                            bestDisp = (int)std::min(v_reduce_min(_d0), v_reduce_min(_d1));
+                        }
+                        else
+                    #endif
+                        {
+                            for( d = 0; d < D; d++ )
+                            {
+                                int Sval = Sp[d];
+                                if( Sval < minS )
+                                {
+                                    minS = Sval;
+                                    bestDisp = d;
+                                }
                             }
                         }
                     }
@@ -829,6 +828,628 @@ static void computeDisparitySGBM( const Mat& img1, const Mat& img2,
     }
 }
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void getBufferPointers(Mat& buffer, int width, int width1, int D, int num_ch, int SH2, int P2,
+                       CostType*& curCostVolumeLine, CostType*& hsumBuf, CostType*& pixDiff,
+                       PixType*& tmpBuf, CostType*& horPassCostVolume,
+                       CostType*& vertPassCostVolume, CostType*& vertPassMin, CostType*& rightPassBuf,
+                       CostType*& disp2CostBuf, short*& disp2Buf);
+
+struct SGBM3WayMainLoop : public ParallelLoopBody
+{
+    Mat* buffers;
+    const Mat *img1, *img2;
+    Mat* dst_disp;
+
+    int nstripes, stripe_sz;
+    int stripe_overlap;
+
+    int width,height;
+    int minD, maxD, D;
+    int minX1, maxX1, width1;
+
+    int SW2, SH2;
+    int P1, P2;
+    int uniquenessRatio, disp12MaxDiff;
+
+    int costBufSize, hsumBufNRows;
+    int TAB_OFS, ftzero;
+
+#if CV_SIMD128
+    bool useSIMD;
+#endif
+
+    PixType* clipTab;
+
+    SGBM3WayMainLoop(Mat *_buffers, const Mat& _img1, const Mat& _img2, Mat* _dst_disp, const StereoSGBMParams& params, PixType* _clipTab, int _nstripes, int _stripe_overlap);
+    void getRawMatchingCost(CostType* C, CostType* hsumBuf, CostType* pixDiff, PixType* tmpBuf, int y, int src_start_idx) const;
+    void operator () (const Range& range) const;
+};
+
+SGBM3WayMainLoop::SGBM3WayMainLoop(Mat *_buffers, const Mat& _img1, const Mat& _img2, Mat* _dst_disp, const StereoSGBMParams& params, PixType* _clipTab, int _nstripes, int _stripe_overlap):
+buffers(_buffers), img1(&_img1), img2(&_img2), dst_disp(_dst_disp), clipTab(_clipTab)
+{
+    nstripes = _nstripes;
+    stripe_overlap = _stripe_overlap;
+    stripe_sz = (int)ceil(img1->rows/(double)nstripes);
+
+    width = img1->cols; height = img1->rows;
+    minD = params.minDisparity; maxD = minD + params.numDisparities; D = maxD - minD;
+    minX1 = std::max(maxD, 0); maxX1 = width + std::min(minD, 0); width1 = maxX1 - minX1;
+    CV_Assert( D % 16 == 0 );
+
+    SW2 = SH2 = params.SADWindowSize > 0 ? params.SADWindowSize/2 : 1;
+
+    P1 = params.P1 > 0 ? params.P1 : 2; P2 = std::max(params.P2 > 0 ? params.P2 : 5, P1+1);
+    uniquenessRatio = params.uniquenessRatio >= 0 ? params.uniquenessRatio : 10;
+    disp12MaxDiff = params.disp12MaxDiff > 0 ? params.disp12MaxDiff : 1;
+
+    costBufSize = width1*D;
+    hsumBufNRows = SH2*2 + 2;
+    TAB_OFS = 256*4;
+    ftzero = std::max(params.preFilterCap, 15) | 1;
+
+#if CV_SIMD128
+    useSIMD = hasSIMD128();
+#endif
+}
+
+void getBufferPointers(Mat& buffer, int width, int width1, int D, int num_ch, int SH2, int P2,
+                       CostType*& curCostVolumeLine, CostType*& hsumBuf, CostType*& pixDiff,
+                       PixType*& tmpBuf, CostType*& horPassCostVolume,
+                       CostType*& vertPassCostVolume, CostType*& vertPassMin, CostType*& rightPassBuf,
+                       CostType*& disp2CostBuf, short*& disp2Buf)
+{
+    // allocating all the required memory:
+    int costVolumeLineSize = width1*D;
+    int width1_ext = width1+2;
+    int costVolumeLineSize_ext = width1_ext*D;
+    int hsumBufNRows = SH2*2 + 2;
+
+    // main buffer to store matching costs for the current line:
+    int curCostVolumeLineSize = costVolumeLineSize*sizeof(CostType);
+
+    // auxiliary buffers for the raw matching cost computation:
+    int hsumBufSize  = costVolumeLineSize*hsumBufNRows*sizeof(CostType);
+    int pixDiffSize  = costVolumeLineSize*sizeof(CostType);
+    int tmpBufSize   = width*16*num_ch*sizeof(PixType);
+
+    // auxiliary buffers for the matching cost aggregation:
+    int horPassCostVolumeSize  = costVolumeLineSize_ext*sizeof(CostType); // buffer for the 2-pass horizontal cost aggregation
+    int vertPassCostVolumeSize = costVolumeLineSize_ext*sizeof(CostType); // buffer for the vertical cost aggregation
+    int vertPassMinSize        = width1_ext*sizeof(CostType);             // buffer for storing minimum costs from the previous line
+    int rightPassBufSize       = D*sizeof(CostType);                      // additional small buffer for the right-to-left pass
+
+    // buffers for the pseudo-LRC check:
+    int disp2CostBufSize = width*sizeof(CostType);
+    int disp2BufSize     = width*sizeof(short);
+
+    // sum up the sizes of all the buffers:
+    size_t totalBufSize = curCostVolumeLineSize +
+                          hsumBufSize +
+                          pixDiffSize +
+                          tmpBufSize  +
+                          horPassCostVolumeSize +
+                          vertPassCostVolumeSize +
+                          vertPassMinSize +
+                          rightPassBufSize +
+                          disp2CostBufSize +
+                          disp2BufSize +
+                          16;  //to compensate for the alignPtr shifts
+
+    if( buffer.empty() || !buffer.isContinuous() || buffer.cols*buffer.rows*buffer.elemSize() < totalBufSize )
+        buffer.create(1, (int)totalBufSize, CV_8U);
+
+    // set up all the pointers:
+    curCostVolumeLine  = (CostType*)alignPtr(buffer.ptr(), 16);
+    hsumBuf            = curCostVolumeLine + costVolumeLineSize;
+    pixDiff            = hsumBuf + costVolumeLineSize*hsumBufNRows;
+    tmpBuf             = (PixType*)(pixDiff + costVolumeLineSize);
+    horPassCostVolume  = (CostType*)(tmpBuf + width*16*num_ch);
+    vertPassCostVolume = horPassCostVolume + costVolumeLineSize_ext;
+    rightPassBuf       = vertPassCostVolume + costVolumeLineSize_ext;
+    vertPassMin        = rightPassBuf + D;
+    disp2CostBuf       = vertPassMin + width1_ext;
+    disp2Buf           = disp2CostBuf + width;
+
+    // initialize memory:
+    memset(buffer.ptr(),0,totalBufSize);
+    for(int i=0;i<costVolumeLineSize;i++)
+        curCostVolumeLine[i] = (CostType)P2; //such initialization simplifies the cost aggregation loops a bit
+}
+
+// performing block matching and building raw cost-volume for the current row
+void SGBM3WayMainLoop::getRawMatchingCost(CostType* C, // target cost-volume row
+                                          CostType* hsumBuf, CostType* pixDiff, PixType* tmpBuf, //buffers
+                                          int y, int src_start_idx) const
+{
+    int x, d;
+    int dy1 = (y == src_start_idx) ? src_start_idx : y + SH2, dy2 = (y == src_start_idx) ? src_start_idx+SH2 : dy1;
+
+    for(int k = dy1; k <= dy2; k++ )
+    {
+        CostType* hsumAdd = hsumBuf + (std::min(k, height-1) % hsumBufNRows)*costBufSize;
+        if( k < height )
+        {
+            calcPixelCostBT( *img1, *img2, k, minD, maxD, pixDiff, tmpBuf, clipTab, TAB_OFS, ftzero );
+
+            memset(hsumAdd, 0, D*sizeof(CostType));
+            for(x = 0; x <= SW2*D; x += D )
+            {
+                int scale = x == 0 ? SW2 + 1 : 1;
+
+                for( d = 0; d < D; d++ )
+                    hsumAdd[d] = (CostType)(hsumAdd[d] + pixDiff[x + d]*scale);
+            }
+
+            if( y > src_start_idx )
+            {
+                const CostType* hsumSub = hsumBuf + (std::max(y - SH2 - 1, src_start_idx) % hsumBufNRows)*costBufSize;
+
+                for( x = D; x < width1*D; x += D )
+                {
+                    const CostType* pixAdd = pixDiff + std::min(x + SW2*D, (width1-1)*D);
+                    const CostType* pixSub = pixDiff + std::max(x - (SW2+1)*D, 0);
+
+#if CV_SIMD128
+                    if(useSIMD)
+                    {
+                        v_int16x8 hv_reg;
+                        for( d = 0; d < D; d+=8 )
+                        {
+                            hv_reg = v_load_aligned(hsumAdd+x-D+d) + (v_load_aligned(pixAdd+d) - v_load_aligned(pixSub+d));
+                            v_store_aligned(hsumAdd+x+d,hv_reg);
+                            v_store_aligned(C+x+d,v_load_aligned(C+x+d)+(hv_reg-v_load_aligned(hsumSub+x+d)));
+                        }
+                    }
+                    else
+#endif
+                    {
+                        for( d = 0; d < D; d++ )
+                        {
+                            int hv = hsumAdd[x + d] = (CostType)(hsumAdd[x - D + d] + pixAdd[d] - pixSub[d]);
+                            C[x + d] = (CostType)(C[x + d] + hv - hsumSub[x + d]);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                for( x = D; x < width1*D; x += D )
+                {
+                    const CostType* pixAdd = pixDiff + std::min(x + SW2*D, (width1-1)*D);
+                    const CostType* pixSub = pixDiff + std::max(x - (SW2+1)*D, 0);
+
+                    for( d = 0; d < D; d++ )
+                        hsumAdd[x + d] = (CostType)(hsumAdd[x - D + d] + pixAdd[d] - pixSub[d]);
+                }
+            }
+        }
+
+        if( y == src_start_idx )
+        {
+            int scale = k == src_start_idx ? SH2 + 1 : 1;
+            for( x = 0; x < width1*D; x++ )
+                C[x] = (CostType)(C[x] + hsumAdd[x]*scale);
+        }
+    }
+}
+
+#if CV_SIMD128
+// define some additional reduce operations:
+inline short min_pos(const v_int16x8& val, const v_int16x8& pos, const short min_val)
+{
+    v_int16x8 v_min = v_setall_s16(min_val);
+    v_int16x8 v_mask = v_min == val;
+    v_int16x8 v_pos = (pos & v_mask) | (v_setall_s16(SHRT_MAX) & ~v_mask);
+
+    return v_reduce_min(v_pos);
+}
+#endif
+
+// performing SGM cost accumulation from left to right (result is stored in leftBuf) and
+// in-place cost accumulation from top to bottom (result is stored in topBuf)
+inline void accumulateCostsLeftTop(CostType* leftBuf, CostType* leftBuf_prev, CostType* topBuf, CostType* costs,
+                                   CostType& leftMinCost, CostType& topMinCost, int D, int P1, int P2)
+{
+#if CV_SIMD128
+    if(hasSIMD128())
+    {
+        v_int16x8 P1_reg = v_setall_s16(cv::saturate_cast<CostType>(P1));
+
+        v_int16x8 leftMinCostP2_reg   = v_setall_s16(cv::saturate_cast<CostType>(leftMinCost+P2));
+        v_int16x8 leftMinCost_new_reg = v_setall_s16(SHRT_MAX);
+        v_int16x8 src0_leftBuf        = v_setall_s16(SHRT_MAX);
+        v_int16x8 src1_leftBuf        = v_load_aligned(leftBuf_prev);
+
+        v_int16x8 topMinCostP2_reg   = v_setall_s16(cv::saturate_cast<CostType>(topMinCost+P2));
+        v_int16x8 topMinCost_new_reg = v_setall_s16(SHRT_MAX);
+        v_int16x8 src0_topBuf        = v_setall_s16(SHRT_MAX);
+        v_int16x8 src1_topBuf        = v_load_aligned(topBuf);
+
+        v_int16x8 src2;
+        v_int16x8 src_shifted_left,src_shifted_right;
+        v_int16x8 res;
+
+        for(int i=0;i<D-8;i+=8)
+        {
+            //process leftBuf:
+            //lookahead load:
+            src2 = v_load_aligned(leftBuf_prev+i+8);
+
+            //get shifted versions of the current block and add P1:
+            src_shifted_left  = v_extract<7> (src0_leftBuf,src1_leftBuf) + P1_reg;
+            src_shifted_right = v_extract<1> (src1_leftBuf,src2        ) + P1_reg;
+
+            // process and save current block:
+            res = v_load_aligned(costs+i) + (v_min(v_min(src_shifted_left,src_shifted_right),v_min(src1_leftBuf,leftMinCostP2_reg))-leftMinCostP2_reg);
+            leftMinCost_new_reg = v_min(leftMinCost_new_reg,res);
+            v_store_aligned(leftBuf+i, res);
+
+            //update src buffers:
+            src0_leftBuf = src1_leftBuf;
+            src1_leftBuf = src2;
+
+            //process topBuf:
+            //lookahead load:
+            src2 = v_load_aligned(topBuf+i+8);
+
+            //get shifted versions of the current block and add P1:
+            src_shifted_left  = v_extract<7> (src0_topBuf,src1_topBuf) + P1_reg;
+            src_shifted_right = v_extract<1> (src1_topBuf,src2       ) + P1_reg;
+
+            // process and save current block:
+            res = v_load_aligned(costs+i) + (v_min(v_min(src_shifted_left,src_shifted_right),v_min(src1_topBuf,topMinCostP2_reg))-topMinCostP2_reg);
+            topMinCost_new_reg = v_min(topMinCost_new_reg,res);
+            v_store_aligned(topBuf+i, res);
+
+            //update src buffers:
+            src0_topBuf = src1_topBuf;
+            src1_topBuf = src2;
+        }
+
+        // a bit different processing for the last cycle of the loop:
+        //process leftBuf:
+        src2 = v_setall_s16(SHRT_MAX);
+        src_shifted_left  = v_extract<7> (src0_leftBuf,src1_leftBuf) + P1_reg;
+        src_shifted_right = v_extract<1> (src1_leftBuf,src2        ) + P1_reg;
+
+        res = v_load_aligned(costs+D-8) + (v_min(v_min(src_shifted_left,src_shifted_right),v_min(src1_leftBuf,leftMinCostP2_reg))-leftMinCostP2_reg);
+        leftMinCost = v_reduce_min(v_min(leftMinCost_new_reg,res));
+        v_store_aligned(leftBuf+D-8, res);
+
+        //process topBuf:
+        src2 = v_setall_s16(SHRT_MAX);
+        src_shifted_left  = v_extract<7> (src0_topBuf,src1_topBuf) + P1_reg;
+        src_shifted_right = v_extract<1> (src1_topBuf,src2       ) + P1_reg;
+
+        res = v_load_aligned(costs+D-8) + (v_min(v_min(src_shifted_left,src_shifted_right),v_min(src1_topBuf,topMinCostP2_reg))-topMinCostP2_reg);
+        topMinCost = v_reduce_min(v_min(topMinCost_new_reg,res));
+        v_store_aligned(topBuf+D-8, res);
+    }
+    else
+#endif
+    {
+        CostType leftMinCost_new = SHRT_MAX;
+        CostType topMinCost_new  = SHRT_MAX;
+        int leftMinCost_P2  = leftMinCost + P2;
+        int topMinCost_P2   = topMinCost  + P2;
+        CostType leftBuf_prev_i_minus_1 = SHRT_MAX;
+        CostType topBuf_i_minus_1       = SHRT_MAX;
+        CostType tmp;
+
+        for(int i=0;i<D-1;i++)
+        {
+            leftBuf[i] = cv::saturate_cast<CostType>(costs[i] + std::min(std::min(leftBuf_prev_i_minus_1+P1,leftBuf_prev[i+1]+P1),std::min((int)leftBuf_prev[i],leftMinCost_P2))-leftMinCost_P2);
+            leftBuf_prev_i_minus_1 = leftBuf_prev[i];
+            leftMinCost_new = std::min(leftMinCost_new,leftBuf[i]);
+
+            tmp = topBuf[i];
+            topBuf[i]  = cv::saturate_cast<CostType>(costs[i] + std::min(std::min(topBuf_i_minus_1+P1,topBuf[i+1]+P1),std::min((int)topBuf[i],topMinCost_P2))-topMinCost_P2);
+            topBuf_i_minus_1 = tmp;
+            topMinCost_new  = std::min(topMinCost_new,topBuf[i]);
+        }
+
+        leftBuf[D-1] = cv::saturate_cast<CostType>(costs[D-1] + std::min(leftBuf_prev_i_minus_1+P1,std::min((int)leftBuf_prev[D-1],leftMinCost_P2))-leftMinCost_P2);
+        leftMinCost = std::min(leftMinCost_new,leftBuf[D-1]);
+
+        topBuf[D-1]  = cv::saturate_cast<CostType>(costs[D-1] + std::min(topBuf_i_minus_1+P1,std::min((int)topBuf[D-1],topMinCost_P2))-topMinCost_P2);
+        topMinCost  = std::min(topMinCost_new,topBuf[D-1]);
+    }
+}
+
+// performing in-place SGM cost accumulation from right to left (the result is stored in rightBuf) and
+// summing rightBuf, topBuf, leftBuf together (the result is stored in leftBuf), as well as finding the
+// optimal disparity value with minimum accumulated cost
+inline void accumulateCostsRight(CostType* rightBuf, CostType* topBuf, CostType* leftBuf, CostType* costs,
+                                 CostType& rightMinCost, int D, int P1, int P2, int& optimal_disp, CostType& min_cost)
+{
+#if CV_SIMD128
+    if(hasSIMD128())
+    {
+        v_int16x8 P1_reg = v_setall_s16(cv::saturate_cast<CostType>(P1));
+
+        v_int16x8 rightMinCostP2_reg   = v_setall_s16(cv::saturate_cast<CostType>(rightMinCost+P2));
+        v_int16x8 rightMinCost_new_reg = v_setall_s16(SHRT_MAX);
+        v_int16x8 src0_rightBuf        = v_setall_s16(SHRT_MAX);
+        v_int16x8 src1_rightBuf        = v_load(rightBuf);
+
+        v_int16x8 src2;
+        v_int16x8 src_shifted_left,src_shifted_right;
+        v_int16x8 res;
+
+        v_int16x8 min_sum_cost_reg = v_setall_s16(SHRT_MAX);
+        v_int16x8 min_sum_pos_reg  = v_setall_s16(0);
+        v_int16x8 loop_idx(0,1,2,3,4,5,6,7);
+        v_int16x8 eight_reg = v_setall_s16(8);
+
+        for(int i=0;i<D-8;i+=8)
+        {
+            //lookahead load:
+            src2 = v_load_aligned(rightBuf+i+8);
+
+            //get shifted versions of the current block and add P1:
+            src_shifted_left  = v_extract<7> (src0_rightBuf,src1_rightBuf) + P1_reg;
+            src_shifted_right = v_extract<1> (src1_rightBuf,src2         ) + P1_reg;
+
+            // process and save current block:
+            res = v_load_aligned(costs+i) + (v_min(v_min(src_shifted_left,src_shifted_right),v_min(src1_rightBuf,rightMinCostP2_reg))-rightMinCostP2_reg);
+            rightMinCost_new_reg = v_min(rightMinCost_new_reg,res);
+            v_store_aligned(rightBuf+i, res);
+
+            // compute and save total cost:
+            res = res + v_load_aligned(leftBuf+i) + v_load_aligned(topBuf+i);
+            v_store_aligned(leftBuf+i, res);
+
+            // track disparity value with the minimum cost:
+            min_sum_cost_reg = v_min(min_sum_cost_reg,res);
+            min_sum_pos_reg = min_sum_pos_reg + ((min_sum_cost_reg == res) & (loop_idx - min_sum_pos_reg));
+            loop_idx = loop_idx+eight_reg;
+
+            //update src:
+            src0_rightBuf    = src1_rightBuf;
+            src1_rightBuf    = src2;
+        }
+
+        // a bit different processing for the last cycle of the loop:
+        src2 = v_setall_s16(SHRT_MAX);
+        src_shifted_left  = v_extract<7> (src0_rightBuf,src1_rightBuf) + P1_reg;
+        src_shifted_right = v_extract<1> (src1_rightBuf,src2         ) + P1_reg;
+
+        res = v_load_aligned(costs+D-8) + (v_min(v_min(src_shifted_left,src_shifted_right),v_min(src1_rightBuf,rightMinCostP2_reg))-rightMinCostP2_reg);
+        rightMinCost = v_reduce_min(v_min(rightMinCost_new_reg,res));
+        v_store_aligned(rightBuf+D-8, res);
+
+        res = res + v_load_aligned(leftBuf+D-8) + v_load_aligned(topBuf+D-8);
+        v_store_aligned(leftBuf+D-8, res);
+
+        min_sum_cost_reg = v_min(min_sum_cost_reg,res);
+        min_cost = v_reduce_min(min_sum_cost_reg);
+        min_sum_pos_reg = min_sum_pos_reg + ((min_sum_cost_reg == res) & (loop_idx - min_sum_pos_reg));
+        optimal_disp = min_pos(min_sum_cost_reg,min_sum_pos_reg, min_cost);
+    }
+    else
+#endif
+    {
+        CostType rightMinCost_new = SHRT_MAX;
+        int rightMinCost_P2  = rightMinCost + P2;
+        CostType rightBuf_i_minus_1 = SHRT_MAX;
+        CostType tmp;
+        min_cost = SHRT_MAX;
+
+        for(int i=0;i<D-1;i++)
+        {
+            tmp = rightBuf[i];
+            rightBuf[i]  = cv::saturate_cast<CostType>(costs[i] + std::min(std::min(rightBuf_i_minus_1+P1,rightBuf[i+1]+P1),std::min((int)rightBuf[i],rightMinCost_P2))-rightMinCost_P2);
+            rightBuf_i_minus_1 = tmp;
+            rightMinCost_new  = std::min(rightMinCost_new,rightBuf[i]);
+            leftBuf[i] = cv::saturate_cast<CostType>((int)leftBuf[i]+rightBuf[i]+topBuf[i]);
+            if(leftBuf[i]<min_cost)
+            {
+                optimal_disp = i;
+                min_cost = leftBuf[i];
+            }
+        }
+
+        rightBuf[D-1]  = cv::saturate_cast<CostType>(costs[D-1] + std::min(rightBuf_i_minus_1+P1,std::min((int)rightBuf[D-1],rightMinCost_P2))-rightMinCost_P2);
+        rightMinCost  = std::min(rightMinCost_new,rightBuf[D-1]);
+        leftBuf[D-1] = cv::saturate_cast<CostType>((int)leftBuf[D-1]+rightBuf[D-1]+topBuf[D-1]);
+        if(leftBuf[D-1]<min_cost)
+        {
+            optimal_disp = D-1;
+            min_cost = leftBuf[D-1];
+        }
+    }
+}
+
+void SGBM3WayMainLoop::operator () (const Range& range) const
+{
+    // force separate processing of stripes:
+    if(range.end>range.start+1)
+    {
+        for(int n=range.start;n<range.end;n++)
+            (*this)(Range(n,n+1));
+        return;
+    }
+
+    const int DISP_SCALE = (1 << StereoMatcher::DISP_SHIFT);
+    int INVALID_DISP = minD - 1, INVALID_DISP_SCALED = INVALID_DISP*DISP_SCALE;
+
+    // setting up the ranges:
+    int src_start_idx = std::max(std::min(range.start * stripe_sz - stripe_overlap, height),0);
+    int src_end_idx   = std::min(range.end   * stripe_sz, height);
+
+    int dst_offset;
+    if(range.start==0)
+        dst_offset=stripe_overlap;
+    else
+        dst_offset=0;
+
+    Mat cur_buffer = buffers [range.start];
+    Mat cur_disp   = dst_disp[range.start];
+    cur_disp = Scalar(INVALID_DISP_SCALED);
+
+    // prepare buffers:
+    CostType *curCostVolumeLine, *hsumBuf, *pixDiff;
+    PixType* tmpBuf;
+    CostType *horPassCostVolume, *vertPassCostVolume, *vertPassMin, *rightPassBuf, *disp2CostBuf;
+    short* disp2Buf;
+    getBufferPointers(cur_buffer,width,width1,D,img1->channels(),SH2,P2,
+                      curCostVolumeLine,hsumBuf,pixDiff,tmpBuf,horPassCostVolume,
+                      vertPassCostVolume,vertPassMin,rightPassBuf,disp2CostBuf,disp2Buf);
+
+    // start real processing:
+    for(int y=src_start_idx;y<src_end_idx;y++)
+    {
+        getRawMatchingCost(curCostVolumeLine,hsumBuf,pixDiff,tmpBuf,y,src_start_idx);
+
+        short* disp_row = (short*)cur_disp.ptr(dst_offset+(y-src_start_idx));
+
+        // initialize the auxiliary buffers for the pseudo left-right consistency check:
+        for(int x=0;x<width;x++)
+        {
+            disp2Buf[x] = (short)INVALID_DISP_SCALED;
+            disp2CostBuf[x] = SHRT_MAX;
+        }
+        CostType* C = curCostVolumeLine - D;
+        CostType prev_min, min_cost;
+        int d, best_d;
+        d = best_d = 0;
+
+        // forward pass
+        prev_min=0;
+        for (int x=D;x<(1+width1)*D;x+=D)
+            accumulateCostsLeftTop(horPassCostVolume+x,horPassCostVolume+x-D,vertPassCostVolume+x,C+x,prev_min,vertPassMin[x/D],D,P1,P2);
+
+        //backward pass
+        memset(rightPassBuf,0,D*sizeof(CostType));
+        prev_min=0;
+        for (int x=width1*D;x>=D;x-=D)
+        {
+            accumulateCostsRight(rightPassBuf,vertPassCostVolume+x,horPassCostVolume+x,C+x,prev_min,D,P1,P2,best_d,min_cost);
+
+            if(uniquenessRatio>0)
+            {
+#if CV_SIMD128
+                if(useSIMD)
+                {
+                    horPassCostVolume+=x;
+                    int thresh = (100*min_cost)/(100-uniquenessRatio);
+                    v_int16x8 thresh_reg = v_setall_s16((short)(thresh+1));
+                    v_int16x8 d1 = v_setall_s16((short)(best_d-1));
+                    v_int16x8 d2 = v_setall_s16((short)(best_d+1));
+                    v_int16x8 eight_reg = v_setall_s16(8);
+                    v_int16x8 cur_d(0,1,2,3,4,5,6,7);
+                    v_int16x8 mask,cost1,cost2;
+
+                    for( d = 0; d < D; d+=16 )
+                    {
+                        cost1 = v_load_aligned(horPassCostVolume+d);
+                        cost2 = v_load_aligned(horPassCostVolume+d+8);
+
+                        mask = cost1 < thresh_reg;
+                        mask = mask & ( (cur_d<d1) | (cur_d>d2) );
+                        if( v_signmask(mask) )
+                            break;
+
+                        cur_d = cur_d+eight_reg;
+
+                        mask = cost2 < thresh_reg;
+                        mask = mask & ( (cur_d<d1) | (cur_d>d2) );
+                        if( v_signmask(mask) )
+                            break;
+
+                        cur_d = cur_d+eight_reg;
+                    }
+                    horPassCostVolume-=x;
+                }
+                else
+#endif
+                {
+                    for( d = 0; d < D; d++ )
+                    {
+                        if( horPassCostVolume[x+d]*(100 - uniquenessRatio) < min_cost*100 && std::abs(d - best_d) > 1 )
+                            break;
+                    }
+                }
+                if( d < D )
+                    continue;
+            }
+            d = best_d;
+
+            int _x2 = x/D - 1 + minX1 - d - minD;
+            if( _x2>=0 && _x2<width && disp2CostBuf[_x2] > min_cost )
+            {
+                disp2CostBuf[_x2] = min_cost;
+                disp2Buf[_x2] = (short)(d + minD);
+            }
+
+            if( 0 < d && d < D-1 )
+            {
+                // do subpixel quadratic interpolation:
+                //   fit parabola into (x1=d-1, y1=Sp[d-1]), (x2=d, y2=Sp[d]), (x3=d+1, y3=Sp[d+1])
+                //   then find minimum of the parabola.
+                int denom2 = std::max(horPassCostVolume[x+d-1] + horPassCostVolume[x+d+1] - 2*horPassCostVolume[x+d], 1);
+                d = d*DISP_SCALE + ((horPassCostVolume[x+d-1] - horPassCostVolume[x+d+1])*DISP_SCALE + denom2)/(denom2*2);
+            }
+            else
+                d *= DISP_SCALE;
+
+            disp_row[(x/D)-1 + minX1] = (DispType)(d + minD*DISP_SCALE);
+        }
+
+        for(int x = minX1; x < maxX1; x++ )
+        {
+            // pseudo LRC consistency check using only one disparity map;
+            // pixels with difference more than disp12MaxDiff are invalidated
+            int d1 = disp_row[x];
+            if( d1 == INVALID_DISP_SCALED )
+                continue;
+            int _d = d1 >> StereoMatcher::DISP_SHIFT;
+            int d_ = (d1 + DISP_SCALE-1) >> StereoMatcher::DISP_SHIFT;
+            int _x = x - _d, x_ = x - d_;
+            if( 0 <= _x && _x < width && disp2Buf[_x] >= minD && std::abs(disp2Buf[_x] - _d) > disp12MaxDiff &&
+                0 <= x_ && x_ < width && disp2Buf[x_] >= minD && std::abs(disp2Buf[x_] - d_) > disp12MaxDiff )
+                disp_row[x] = (short)INVALID_DISP_SCALED;
+        }
+    }
+}
+
+static void computeDisparity3WaySGBM( const Mat& img1, const Mat& img2,
+                                      Mat& disp1, const StereoSGBMParams& params,
+                                      Mat* buffers, int nstripes )
+{
+    // precompute a lookup table for the raw matching cost computation:
+    const int TAB_OFS = 256*4, TAB_SIZE = 256 + TAB_OFS*2;
+    PixType* clipTab = new PixType[TAB_SIZE];
+    int ftzero = std::max(params.preFilterCap, 15) | 1;
+    for(int k = 0; k < TAB_SIZE; k++ )
+        clipTab[k] = (PixType)(std::min(std::max(k - TAB_OFS, -ftzero), ftzero) + ftzero);
+
+    // allocate separate dst_disp arrays to avoid conflicts due to stripe overlap:
+    int stripe_sz = (int)ceil(img1.rows/(double)nstripes);
+    int stripe_overlap = (params.SADWindowSize/2+1) + (int)ceil(0.1*stripe_sz);
+    Mat* dst_disp = new Mat[nstripes];
+    for(int i=0;i<nstripes;i++)
+        dst_disp[i].create(stripe_sz+stripe_overlap,img1.cols,CV_16S);
+
+    parallel_for_(Range(0,nstripes),SGBM3WayMainLoop(buffers,img1,img2,dst_disp,params,clipTab,nstripes,stripe_overlap));
+
+    //assemble disp1 from dst_disp:
+    short* dst_row;
+    short* src_row;
+    for(int i=0;i<disp1.rows;i++)
+    {
+        dst_row = (short*)disp1.ptr(i);
+        src_row = (short*)dst_disp[i/stripe_sz].ptr(stripe_overlap+i%stripe_sz);
+        memcpy(dst_row,src_row,disp1.cols*sizeof(short));
+    }
+
+    delete[] clipTab;
+    delete[] dst_disp;
+}
+
 class StereoSGBMImpl : public StereoSGBM
 {
 public:
@@ -850,6 +1471,8 @@ public:
 
     void compute( InputArray leftarr, InputArray rightarr, OutputArray disparr )
     {
+        CV_INSTRUMENT_REGION()
+
         Mat left = leftarr.getMat(), right = rightarr.getMat();
         CV_Assert( left.size() == right.size() && left.type() == right.type() &&
                    left.depth() == CV_8U );
@@ -857,15 +1480,17 @@ public:
         disparr.create( left.size(), CV_16S );
         Mat disp = disparr.getMat();
 
-        computeDisparitySGBM( left, right, disp, params, buffer );
+        if(params.mode==MODE_SGBM_3WAY)
+            computeDisparity3WaySGBM( left, right, disp, params, buffers, num_stripes );
+        else
+            computeDisparitySGBM( left, right, disp, params, buffer );
+
         medianBlur(disp, disp, 3);
 
         if( params.speckleWindowSize > 0 )
             filterSpeckles(disp, (params.minDisparity - 1)*StereoMatcher::DISP_SCALE, params.speckleWindowSize,
                            StereoMatcher::DISP_SCALE*params.speckleRange, buffer);
     }
-
-    AlgorithmInfo* info() const { return 0; }
 
     int getMinDisparity() const { return params.minDisparity; }
     void setMinDisparity(int minDisparity) { params.minDisparity = minDisparity; }
@@ -902,6 +1527,7 @@ public:
 
     void write(FileStorage& fs) const
     {
+        writeFormat(fs);
         fs << "name" << name_
         << "minDisparity" << params.minDisparity
         << "numDisparities" << params.numDisparities
@@ -935,6 +1561,12 @@ public:
 
     StereoSGBMParams params;
     Mat buffer;
+
+    // the number of stripes is fixed, disregarding the number of threads/processors
+    // to make the results fully reproducible:
+    static const int num_stripes = 4;
+    Mat buffers[num_stripes];
+
     static const char* name_;
 };
 
@@ -1072,11 +1704,54 @@ void filterSpecklesImpl(cv::Mat& img, int newVal, int maxSpeckleSize, int maxDif
     }
 }
 
+#ifdef HAVE_IPP
+static bool ipp_filterSpeckles(Mat &img, int maxSpeckleSize, int newVal, int maxDiff)
+{
+    CV_INSTRUMENT_REGION_IPP()
+
+#if IPP_VERSION_X100 >= 810
+    int type = img.type();
+    Ipp32s bufsize = 0;
+    IppiSize roisize = { img.cols, img.rows };
+    IppDataType datatype = type == CV_8UC1 ? ipp8u : ipp16s;
+    Ipp8u *pBuffer = NULL;
+    IppStatus status = ippStsNoErr;
+
+    if(ippiMarkSpecklesGetBufferSize(roisize, datatype, CV_MAT_CN(type), &bufsize) < 0)
+        return false;
+
+    pBuffer = (Ipp8u*)ippMalloc(bufsize);
+    if(!pBuffer && bufsize)
+        return false;
+
+    if (type == CV_8UC1)
+    {
+        status = CV_INSTRUMENT_FUN_IPP(ippiMarkSpeckles_8u_C1IR, img.ptr<Ipp8u>(), (int)img.step, roisize,
+                                            (Ipp8u)newVal, maxSpeckleSize, (Ipp8u)maxDiff, ippiNormL1, pBuffer);
+    }
+    else
+    {
+        status = CV_INSTRUMENT_FUN_IPP(ippiMarkSpeckles_16s_C1IR, img.ptr<Ipp16s>(), (int)img.step, roisize,
+                                            (Ipp16s)newVal, maxSpeckleSize, (Ipp16s)maxDiff, ippiNormL1, pBuffer);
+    }
+    if(pBuffer) ippFree(pBuffer);
+
+    if (status >= 0)
+        return true;
+#else
+    CV_UNUSED(img); CV_UNUSED(maxSpeckleSize); CV_UNUSED(newVal); CV_UNUSED(maxDiff);
+#endif
+    return false;
+}
+#endif
+
 }
 
 void cv::filterSpeckles( InputOutputArray _img, double _newval, int maxSpeckleSize,
                          double _maxDiff, InputOutputArray __buf )
 {
+    CV_INSTRUMENT_REGION()
+
     Mat img = _img.getMat();
     int type = img.type();
     Mat temp, &_buf = __buf.needed() ? __buf.getMatRef() : temp;
@@ -1084,37 +1759,7 @@ void cv::filterSpeckles( InputOutputArray _img, double _newval, int maxSpeckleSi
 
     int newVal = cvRound(_newval), maxDiff = cvRound(_maxDiff);
 
-#if IPP_VERSION_X100 >= 801
-    CV_IPP_CHECK()
-    {
-        Ipp32s bufsize = 0;
-        IppiSize roisize = { img.cols, img.rows };
-        IppDataType datatype = type == CV_8UC1 ? ipp8u : ipp16s;
-
-        if (!__buf.needed() && (type == CV_8UC1 || type == CV_16SC1))
-        {
-            IppStatus status = ippiMarkSpecklesGetBufferSize(roisize, datatype, CV_MAT_CN(type), &bufsize);
-            Ipp8u * buffer = ippsMalloc_8u(bufsize);
-
-            if ((int)status >= 0)
-            {
-                if (type == CV_8UC1)
-                    status = ippiMarkSpeckles_8u_C1IR(img.ptr<Ipp8u>(), (int)img.step, roisize,
-                                                      (Ipp8u)newVal, maxSpeckleSize, (Ipp8u)maxDiff, ippiNormL1, buffer);
-                else
-                    status = ippiMarkSpeckles_16s_C1IR(img.ptr<Ipp16s>(), (int)img.step, roisize,
-                                                       (Ipp16s)newVal, maxSpeckleSize, (Ipp16s)maxDiff, ippiNormL1, buffer);
-            }
-
-            if (status >= 0)
-            {
-                CV_IMPL_ADD(CV_IMPL_IPP);
-                return;
-            }
-            setIppErrorStatus();
-        }
-    }
-#endif
+    CV_IPP_RUN(IPP_VERSION_X100 >= 810 && !__buf.needed() && (type == CV_8UC1 || type == CV_16SC1), ipp_filterSpeckles(img, maxSpeckleSize, newVal, maxDiff));
 
     if (type == CV_8UC1)
         filterSpecklesImpl<uchar>(img, newVal, maxSpeckleSize, maxDiff, _buf);
@@ -1125,6 +1770,8 @@ void cv::filterSpeckles( InputOutputArray _img, double _newval, int maxSpeckleSi
 void cv::validateDisparity( InputOutputArray _disp, InputArray _cost, int minDisparity,
                             int numberOfDisparities, int disp12MaxDiff )
 {
+    CV_INSTRUMENT_REGION()
+
     Mat disp = _disp.getMat(), cost = _cost.getMat();
     int cols = disp.cols, rows = disp.rows;
     int minD = minDisparity, maxD = minDisparity + numberOfDisparities;
@@ -1159,6 +1806,10 @@ void cv::validateDisparity( InputOutputArray _disp, InputArray _cost, int minDis
             for( x = minX1; x < maxX1; x++ )
             {
                 int d = dptr[x], c = cptr[x];
+
+                if( d == INVALID_DISP_SCALED )
+                    continue;
+
                 int x2 = x - ((d + DISP_SCALE/2) >> DISP_SHIFT);
 
                 if( disp2cost[x2] > c )
@@ -1175,9 +1826,13 @@ void cv::validateDisparity( InputOutputArray _disp, InputArray _cost, int minDis
             for( x = minX1; x < maxX1; x++ )
             {
                 int d = dptr[x], c = cptr[x];
+
+                if( d == INVALID_DISP_SCALED )
+                    continue;
+
                 int x2 = x - ((d + DISP_SCALE/2) >> DISP_SHIFT);
 
-                if( disp2cost[x2] < c )
+                if( disp2cost[x2] > c )
                 {
                     disp2cost[x2] = c;
                     disp2buf[x2] = d;

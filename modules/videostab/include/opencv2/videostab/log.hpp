@@ -40,8 +40,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_VIDEOSTAB_LOG_HPP__
-#define __OPENCV_VIDEOSTAB_LOG_HPP__
+#ifndef OPENCV_VIDEOSTAB_LOG_HPP
+#define OPENCV_VIDEOSTAB_LOG_HPP
 
 #include "opencv2/core.hpp"
 
@@ -49,6 +49,9 @@ namespace cv
 {
 namespace videostab
 {
+
+//! @addtogroup videostab
+//! @{
 
 class CV_EXPORTS ILog
 {
@@ -68,6 +71,8 @@ class CV_EXPORTS LogToStdout : public ILog
 public:
     virtual void print(const char *format, ...);
 };
+
+//! @}
 
 } // namespace videostab
 } // namespace cv

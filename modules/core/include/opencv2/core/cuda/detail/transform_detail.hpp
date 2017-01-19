@@ -40,12 +40,14 @@
 //
 //M*/
 
-#ifndef __OPENCV_CUDA_TRANSFORM_DETAIL_HPP__
-#define __OPENCV_CUDA_TRANSFORM_DETAIL_HPP__
+#ifndef OPENCV_CUDA_TRANSFORM_DETAIL_HPP
+#define OPENCV_CUDA_TRANSFORM_DETAIL_HPP
 
 #include "../common.hpp"
 #include "../vec_traits.hpp"
 #include "../functional.hpp"
+
+//! @cond IGNORED
 
 namespace cv { namespace cuda { namespace device
 {
@@ -392,4 +394,6 @@ namespace cv { namespace cuda { namespace device
     } // namespace transform_detail
 }}} // namespace cv { namespace cuda { namespace cudev
 
-#endif // __OPENCV_CUDA_TRANSFORM_DETAIL_HPP__
+//! @endcond
+
+#endif // OPENCV_CUDA_TRANSFORM_DETAIL_HPP

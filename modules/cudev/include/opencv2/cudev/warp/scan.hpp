@@ -43,14 +43,17 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_WARP_SCAN_HPP__
-#define __OPENCV_CUDEV_WARP_SCAN_HPP__
+#ifndef OPENCV_CUDEV_WARP_SCAN_HPP
+#define OPENCV_CUDEV_WARP_SCAN_HPP
 
 #include "../common.hpp"
 #include "warp.hpp"
 #include "shuffle.hpp"
 
 namespace cv { namespace cudev {
+
+//! @addtogroup cudev
+//! @{
 
 template <typename T>
 __device__ T warpScanInclusive(T data, volatile T* smem, uint tid)
@@ -93,6 +96,8 @@ __device__ __forceinline__ T warpScanExclusive(T data, volatile T* smem, uint ti
 {
     return warpScanInclusive(data, smem, tid) - data;
 }
+
+//! @}
 
 }}
 

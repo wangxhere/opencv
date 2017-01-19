@@ -185,7 +185,7 @@ namespace
                ocl::KernelArg::WriteOnlyNoSize(forwardMap),
                ocl::KernelArg::WriteOnly(backwardMap));
 
-        size_t globalsize[2] = { size.width, size.height };
+        size_t globalsize[2] = { (size_t)size.width, (size_t)size.height };
         return k.run(2, globalsize, NULL, false);
     }
 
@@ -258,7 +258,7 @@ namespace
         k.args(ocl::KernelArg::ReadOnly(src),
                ocl::KernelArg::ReadWriteNoSize(dst), scale);
 
-        size_t globalsize[2] = { src.cols, src.rows };
+        size_t globalsize[2] = { (size_t)src.cols, (size_t)src.rows };
         return k.run(2, globalsize, NULL, false);
     }
 
@@ -316,7 +316,7 @@ namespace
                ocl::KernelArg::ReadOnlyNoSize(src2),
                ocl::KernelArg::WriteOnly(dst, cn));
 
-        size_t globalsize[2] = { src1.cols * cn, src1.rows };
+        size_t globalsize[2] = { (size_t)src1.cols * cn, (size_t)src1.rows };
         return k.run(2, globalsize, NULL, false);
     }
 
@@ -436,7 +436,7 @@ namespace
         k.args(ocl::KernelArg::ReadOnlyNoSize(src), ocl::KernelArg::WriteOnly(dst),
               ksize, ocl::KernelArg::PtrReadOnly(ubtvWeights));
 
-        size_t globalsize[2] = { src.cols, src.rows };
+        size_t globalsize[2] = { (size_t)src.cols, (size_t)src.rows };
         return k.run(2, globalsize, NULL, false);
     }
 
@@ -460,7 +460,7 @@ namespace
         func(_src, _dst, btvKernelSize, btvWeights);
     }
 
-    class BTVL1_Base
+    class BTVL1_Base : public cv::superres::SuperResolution
     {
     public:
         BTVL1_Base();
@@ -469,6 +469,17 @@ namespace
                      InputArrayOfArrays backwardMotions, int baseIdx);
 
         void collectGarbage();
+
+        CV_IMPL_PROPERTY(int, Scale, scale_)
+        CV_IMPL_PROPERTY(int, Iterations, iterations_)
+        CV_IMPL_PROPERTY(double, Tau, tau_)
+        CV_IMPL_PROPERTY(double, Labmda, lambda_)
+        CV_IMPL_PROPERTY(double, Alpha, alpha_)
+        CV_IMPL_PROPERTY(int, KernelSize, btvKernelSize_)
+        CV_IMPL_PROPERTY(int, BlurKernelSize, blurKernelSize_)
+        CV_IMPL_PROPERTY(double, BlurSigma, blurSigma_)
+        CV_IMPL_PROPERTY(int, TemporalAreaRadius, temporalAreaRadius_)
+        CV_IMPL_PROPERTY_S(Ptr<cv::superres::DenseOpticalFlowExt>, OpticalFlow, opticalFlow_)
 
     protected:
         int scale_;
@@ -479,7 +490,8 @@ namespace
         int btvKernelSize_;
         int blurKernelSize_;
         double blurSigma_;
-        Ptr<DenseOpticalFlowExt> opticalFlow_;
+        int temporalAreaRadius_; // not used in some implementations
+        Ptr<cv::superres::DenseOpticalFlowExt> opticalFlow_;
 
     private:
         bool ocl_process(InputArrayOfArrays src, OutputArray dst, InputArrayOfArrays forwardMotions,
@@ -539,6 +551,7 @@ namespace
         btvKernelSize_ = 7;
         blurKernelSize_ = 5;
         blurSigma_ = 0.0;
+        temporalAreaRadius_ = 0;
         opticalFlow_ = createOptFlow_Farneback();
 
         curBlurKernelSize_ = -1;
@@ -645,6 +658,8 @@ namespace
     void BTVL1_Base::process(InputArrayOfArrays _src, OutputArray _dst, InputArrayOfArrays _forwardMotions,
                              InputArrayOfArrays _backwardMotions, int baseIdx)
     {
+        CV_INSTRUMENT_REGION()
+
         CV_Assert( scale_ > 1 );
         CV_Assert( iterations_ > 0 );
         CV_Assert( tau_ > 0.0 );
@@ -781,12 +796,9 @@ namespace
 
 ////////////////////////////////////////////////////////////////////
 
-    class BTVL1 :
-            public SuperResolution, private BTVL1_Base
+    class BTVL1 : public BTVL1_Base
     {
     public:
-        AlgorithmInfo* info() const;
-
         BTVL1();
 
         void collectGarbage();
@@ -799,8 +811,6 @@ namespace
         bool ocl_processImpl(Ptr<FrameSource>& frameSource, OutputArray output);
 
     private:
-        int temporalAreaRadius_;
-
         void readNextFrame(Ptr<FrameSource>& frameSource);
         bool ocl_readNextFrame(Ptr<FrameSource>& frameSource);
 
@@ -840,18 +850,6 @@ namespace
         std::vector<UMat> usrcBackwardMotions_;
 #endif
     };
-
-    CV_INIT_ALGORITHM(BTVL1, "SuperResolution.BTVL1",
-                      obj.info()->addParam(obj, "scale", obj.scale_, false, 0, 0, "Scale factor.");
-                      obj.info()->addParam(obj, "iterations", obj.iterations_, false, 0, 0, "Iteration count.");
-                      obj.info()->addParam(obj, "tau", obj.tau_, false, 0, 0, "Asymptotic value of steepest descent method.");
-                      obj.info()->addParam(obj, "lambda", obj.lambda_, false, 0, 0, "Weight parameter to balance data term and smoothness term.");
-                      obj.info()->addParam(obj, "alpha", obj.alpha_, false, 0, 0, "Parameter of spacial distribution in Bilateral-TV.");
-                      obj.info()->addParam(obj, "btvKernelSize", obj.btvKernelSize_, false, 0, 0, "Kernel size of Bilateral-TV filter.");
-                      obj.info()->addParam(obj, "blurKernelSize", obj.blurKernelSize_, false, 0, 0, "Gaussian blur kernel size.");
-                      obj.info()->addParam(obj, "blurSigma", obj.blurSigma_, false, 0, 0, "Gaussian blur sigma.");
-                      obj.info()->addParam(obj, "temporalAreaRadius", obj.temporalAreaRadius_, false, 0, 0, "Radius of the temporal search area.");
-                      obj.info()->addParam<DenseOpticalFlowExt>(obj, "opticalFlow", obj.opticalFlow_, false, 0, 0, "Dense optical flow algorithm."))
 
     BTVL1::BTVL1()
     {
@@ -958,6 +956,8 @@ namespace
 
     void BTVL1::processImpl(Ptr<FrameSource>& frameSource, OutputArray _output)
     {
+        CV_INSTRUMENT_REGION()
+
         if (outPos_ >= storePos_)
         {
             _output.release();
@@ -1007,6 +1007,8 @@ namespace
 
     void BTVL1::readNextFrame(Ptr<FrameSource>& frameSource)
     {
+        CV_INSTRUMENT_REGION()
+
         frameSource->nextFrame(curFrame_);
         if (curFrame_.empty())
             return;
@@ -1069,6 +1071,8 @@ namespace
 
     void BTVL1::processFrame(int idx)
     {
+        CV_INSTRUMENT_REGION()
+
         CV_OCL_RUN(isUmat_,
                    ocl_processFrame(idx))
 
@@ -1101,7 +1105,7 @@ namespace
     }
 }
 
-Ptr<SuperResolution> cv::superres::createSuperResolution_BTVL1()
+Ptr<cv::superres::SuperResolution> cv::superres::createSuperResolution_BTVL1()
 {
     return makePtr<BTVL1>();
 }

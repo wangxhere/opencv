@@ -41,13 +41,16 @@
 //M*/
 
 
-#ifndef __OPENCV_STITCHING_TIMELAPSERS_HPP__
-#define __OPENCV_STITCHING_TIMELAPSERS_HPP__
+#ifndef OPENCV_STITCHING_TIMELAPSERS_HPP
+#define OPENCV_STITCHING_TIMELAPSERS_HPP
 
 #include "opencv2/core.hpp"
 
 namespace cv {
 namespace detail {
+
+//! @addtogroup stitching
+//! @{
 
 //  Base Timelapser class, takes a sequence of images, applies appropriate shift, stores result in dst_.
 
@@ -80,7 +83,9 @@ public:
     virtual void initialize(const std::vector<Point> &corners, const std::vector<Size> &sizes);
 };
 
+//! @}
+
 } // namespace detail
 } // namespace cv
 
-#endif // __OPENCV_STITCHING_TIMELAPSERS_HPP__
+#endif // OPENCV_STITCHING_TIMELAPSERS_HPP

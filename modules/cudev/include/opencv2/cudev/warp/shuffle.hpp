@@ -43,13 +43,16 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_WARP_SHUFFLE_HPP__
-#define __OPENCV_CUDEV_WARP_SHUFFLE_HPP__
+#ifndef OPENCV_CUDEV_WARP_SHUFFLE_HPP
+#define OPENCV_CUDEV_WARP_SHUFFLE_HPP
 
 #include "../common.hpp"
 #include "../util/vec_traits.hpp"
 
 namespace cv { namespace cudev {
+
+//! @addtogroup cudev
+//! @{
 
 #if CV_CUDEV_ARCH >= 300
 
@@ -418,6 +421,8 @@ CV_CUDEV_SHFL_XOR_VEC_INST(double)
 #undef CV_CUDEV_SHFL_XOR_VEC_INST
 
 #endif // CV_CUDEV_ARCH >= 300
+
+//! @}
 
 }}
 

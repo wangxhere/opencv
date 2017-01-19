@@ -41,13 +41,15 @@
 //
 //M*/
 
-#ifndef __OPENCV_CORE_CVSTDINL_HPP__
-#define __OPENCV_CORE_CVSTDINL_HPP__
+#ifndef OPENCV_CORE_CVSTDINL_HPP
+#define OPENCV_CORE_CVSTDINL_HPP
 
 #ifndef OPENCV_NOSTL
 #  include <complex>
 #  include <ostream>
 #endif
+
+//! @cond IGNORED
 
 namespace cv
 {
@@ -85,7 +87,7 @@ String::String(const std::string& str, size_t pos, size_t len)
     : cstr_(0), len_(0)
 {
     size_t strlen = str.size();
-    pos = max(pos, strlen);
+    pos = min(pos, strlen);
     len = min(strlen - pos, len);
     if (!len) return;
     memcpy(allocate(len), str.c_str() + pos, len);
@@ -260,4 +262,6 @@ std::ostream& operator << (std::ostream& out, const Rect_<_Tp>& rect)
 #endif // OPENCV_NOSTL
 } // cv
 
-#endif // __OPENCV_CORE_CVSTDINL_HPP__
+//! @endcond
+
+#endif // OPENCV_CORE_CVSTDINL_HPP

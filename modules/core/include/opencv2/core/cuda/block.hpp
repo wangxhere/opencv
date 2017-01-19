@@ -40,8 +40,14 @@
 //
 //M*/
 
-#ifndef __OPENCV_CUDA_DEVICE_BLOCK_HPP__
-#define __OPENCV_CUDA_DEVICE_BLOCK_HPP__
+#ifndef OPENCV_CUDA_DEVICE_BLOCK_HPP
+#define OPENCV_CUDA_DEVICE_BLOCK_HPP
+
+/** @file
+ * @deprecated Use @ref cudev instead.
+ */
+
+//! @cond IGNORED
 
 namespace cv { namespace cuda { namespace device
 {
@@ -200,4 +206,6 @@ namespace cv { namespace cuda { namespace device
     };
 }}}
 
-#endif /* __OPENCV_CUDA_DEVICE_BLOCK_HPP__ */
+//! @endcond
+
+#endif /* OPENCV_CUDA_DEVICE_BLOCK_HPP */

@@ -12,6 +12,7 @@
 //
 // Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
 // Copyright (C) 2009-2010, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2014, Itseez Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 //
 // Redistribution and use in source and binary forms, with or without modification,
@@ -1614,6 +1615,8 @@ static void Bayer2RGB_EdgeAware_T(const Mat& src, Mat& dst, int code)
 
 void cv::demosaicing(InputArray _src, OutputArray _dst, int code, int dcn)
 {
+    CV_INSTRUMENT_REGION()
+
     Mat src = _src.getMat(), dst;
     Size sz = src.size();
     int scn = src.channels(), depth = src.depth();

@@ -41,8 +41,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_OBJDETECT_C_H__
-#define __OPENCV_OBJDETECT_C_H__
+#ifndef OPENCV_OBJDETECT_C_H
+#define OPENCV_OBJDETECT_C_H
 
 #include "opencv2/core/core_c.h"
 
@@ -52,6 +52,10 @@
 
 extern "C" {
 #endif
+
+/** @addtogroup objdetect_c
+  @{
+  */
 
 /****************************************************************************************\
 *                         Haar-like Object Detection functions                           *
@@ -143,6 +147,7 @@ CVAPI(void) cvSetImagesForHaarClassifierCascade( CvHaarClassifierCascade* cascad
 CVAPI(int) cvRunHaarClassifierCascade( const CvHaarClassifierCascade* cascade,
                                        CvPoint pt, int start_stage CV_DEFAULT(0));
 
+/** @} objdetect_c */
 
 #ifdef __cplusplus
 }
@@ -157,4 +162,4 @@ CV_EXPORTS CvSeq* cvHaarDetectObjectsForROC( const CvArr* image,
 
 #endif
 
-#endif /* __OPENCV_OBJDETECT_C_H__ */
+#endif /* OPENCV_OBJDETECT_C_H */

@@ -40,8 +40,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_VIDEOSTAB_STABILIZER_HPP__
-#define __OPENCV_VIDEOSTAB_STABILIZER_HPP__
+#ifndef OPENCV_VIDEOSTAB_STABILIZER_HPP
+#define OPENCV_VIDEOSTAB_STABILIZER_HPP
 
 #include <vector>
 #include <ctime>
@@ -59,6 +59,9 @@ namespace cv
 {
 namespace videostab
 {
+
+//! @addtogroup videostab
+//! @{
 
 class CV_EXPORTS StabilizerBase
 {
@@ -188,6 +191,8 @@ protected:
     std::vector<Mat> motions2_;
     Mat suppressedFrame_;
 };
+
+//! @}
 
 } // namespace videostab
 } // namespace cv

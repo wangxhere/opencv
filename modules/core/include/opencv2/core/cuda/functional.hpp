@@ -40,14 +40,20 @@
 //
 //M*/
 
-#ifndef __OPENCV_CUDA_FUNCTIONAL_HPP__
-#define __OPENCV_CUDA_FUNCTIONAL_HPP__
+#ifndef OPENCV_CUDA_FUNCTIONAL_HPP
+#define OPENCV_CUDA_FUNCTIONAL_HPP
 
 #include <functional>
 #include "saturate_cast.hpp"
 #include "vec_traits.hpp"
 #include "type_traits.hpp"
 #include "device_functions.h"
+
+/** @file
+ * @deprecated Use @ref cudev instead.
+ */
+
+//! @cond IGNORED
 
 namespace cv { namespace cuda { namespace device
 {
@@ -786,4 +792,6 @@ namespace cv { namespace cuda { namespace device
     template <> struct TransformFunctorTraits< type > : DefaultTransformFunctorTraits< type >
 }}} // namespace cv { namespace cuda { namespace cudev
 
-#endif // __OPENCV_CUDA_FUNCTIONAL_HPP__
+//! @endcond
+
+#endif // OPENCV_CUDA_FUNCTIONAL_HPP

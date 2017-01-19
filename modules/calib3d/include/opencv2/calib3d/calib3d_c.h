@@ -41,14 +41,18 @@
 //
 //M*/
 
-#ifndef __OPENCV_CALIB3D_C_H__
-#define __OPENCV_CALIB3D_C_H__
+#ifndef OPENCV_CALIB3D_C_H
+#define OPENCV_CALIB3D_C_H
 
 #include "opencv2/core/core_c.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/** @addtogroup calib3d_c
+  @{
+  */
 
 /****************************************************************************************\
 *                      Camera Calibration, Pose Estimation and Stereo                    *
@@ -239,7 +243,10 @@ CVAPI(void) cvDrawChessboardCorners( CvArr* image, CvSize pattern_size,
 #define CV_CALIB_RATIONAL_MODEL 16384
 #define CV_CALIB_THIN_PRISM_MODEL 32768
 #define CV_CALIB_FIX_S1_S2_S3_S4  65536
+#define CV_CALIB_TILTED_MODEL  262144
+#define CV_CALIB_FIX_TAUX_TAUY  524288
 
+#define CV_CALIB_NINTRINSIC 18
 
 /* Finds intrinsic and extrinsic camera parameters
    from a few views of known calibration pattern */
@@ -371,6 +378,8 @@ CVAPI(void)  cvReprojectImageTo3D( const CvArr* disparityImage,
                                    CvArr* _3dImage, const CvMat* Q,
                                    int handleMissingValues CV_DEFAULT(0) );
 
+/** @} calib3d_c */
+
 #ifdef __cplusplus
 } // extern "C"
 
@@ -409,8 +418,9 @@ public:
     int state;
     int iters;
     bool completeSymmFlag;
+    int solveMethod;
 };
 
 #endif
 
-#endif /* __OPENCV_CALIB3D_C_H__ */
+#endif /* OPENCV_CALIB3D_C_H */

@@ -43,12 +43,15 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_UTIL_ATOMIC_HPP__
-#define __OPENCV_CUDEV_UTIL_ATOMIC_HPP__
+#ifndef OPENCV_CUDEV_UTIL_ATOMIC_HPP
+#define OPENCV_CUDEV_UTIL_ATOMIC_HPP
 
 #include "../common.hpp"
 
 namespace cv { namespace cudev {
+
+//! @addtogroup cudev
+//! @{
 
 // atomicAdd
 
@@ -191,6 +194,8 @@ __device__ static double atomicMax(double* address, double val)
     return 0.0;
 #endif
 }
+
+//! @}
 
 }}
 

@@ -40,8 +40,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_VIDEOSTAB_MOTION_STABILIZING_HPP__
-#define __OPENCV_VIDEOSTAB_MOTION_STABILIZING_HPP__
+#ifndef OPENCV_VIDEOSTAB_MOTION_STABILIZING_HPP
+#define OPENCV_VIDEOSTAB_MOTION_STABILIZING_HPP
 
 #include <vector>
 #include <utility>
@@ -53,12 +53,15 @@ namespace cv
 namespace videostab
 {
 
+//! @addtogroup videostab_motion
+//! @{
+
 class CV_EXPORTS IMotionStabilizer
 {
 public:
     virtual ~IMotionStabilizer() {}
 
-    // assumes that [0, size-1) is in or equals to [range.first, range.second)
+    //! assumes that [0, size-1) is in or equals to [range.first, range.second)
     virtual void stabilize(
             int size, const std::vector<Mat> &motions, std::pair<int,int> range,
             Mat *stabilizationMotions) = 0;
@@ -162,6 +165,8 @@ private:
 CV_EXPORTS Mat ensureInclusionConstraint(const Mat &M, Size size, float trimRatio);
 
 CV_EXPORTS float estimateOptimalTrimRatio(const Mat &M, Size size);
+
+//! @}
 
 } // namespace videostab
 } // namespace

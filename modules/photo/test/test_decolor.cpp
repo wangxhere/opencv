@@ -47,7 +47,6 @@
 using namespace cv;
 using namespace std;
 
-
 TEST(Photo_Decolor, regression)
 {
         string folder = string(cvtest::TS::ptr()->get_data_path()) + "decolor/";
@@ -56,12 +55,16 @@ TEST(Photo_Decolor, regression)
         Mat original = imread(original_path, IMREAD_COLOR);
 
         ASSERT_FALSE(original.empty()) << "Could not load input image " << original_path;
-        ASSERT_FALSE(original.channels()!=3) << "Load color input image " << original_path;
+        ASSERT_EQ(3, original.channels()) << "Load color input image " << original_path;
 
         Mat grayscale, color_boost;
         decolor(original, grayscale, color_boost);
 
-        imwrite(folder + "grayscale.png",grayscale);
-        imwrite(folder + "color_boost.png",color_boost);
+        Mat reference_grayscale = imread(folder + "grayscale_reference.png", 0 /* == grayscale image*/);
+        double gray_psnr = cvtest::PSNR(reference_grayscale, grayscale);
+        EXPECT_GT(gray_psnr, 60.0);
 
+        Mat reference_boost = imread(folder + "boost_reference.png");
+        double boost_psnr = cvtest::PSNR(reference_boost, color_boost);
+        EXPECT_GT(boost_psnr, 60.0);
 }

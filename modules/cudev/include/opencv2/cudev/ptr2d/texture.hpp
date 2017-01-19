@@ -43,8 +43,8 @@
 
 #pragma once
 
-#ifndef __OPENCV_CUDEV_PTR2D_TEXTURE_HPP__
-#define __OPENCV_CUDEV_PTR2D_TEXTURE_HPP__
+#ifndef OPENCV_CUDEV_PTR2D_TEXTURE_HPP
+#define OPENCV_CUDEV_PTR2D_TEXTURE_HPP
 
 #include <cstring>
 #include "../common.hpp"
@@ -91,6 +91,9 @@ namespace
 #endif
 
 namespace cv { namespace cudev {
+
+//! @addtogroup cudev
+//! @{
 
 #if CUDART_VERSION >= 5050
 
@@ -247,6 +250,8 @@ template <typename T> struct PtrTraits< Texture<T> > : PtrTraitsBase<Texture<T>,
 };
 
 #endif
+
+//! @}
 
 }}
 

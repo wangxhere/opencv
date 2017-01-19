@@ -40,8 +40,8 @@
 //
 //M*/
 
-#ifndef __OPENCV_VIDEOSTAB_FRAME_SOURCE_HPP__
-#define __OPENCV_VIDEOSTAB_FRAME_SOURCE_HPP__
+#ifndef OPENCV_VIDEOSTAB_FRAME_SOURCE_HPP
+#define OPENCV_VIDEOSTAB_FRAME_SOURCE_HPP
 
 #include <vector>
 #include "opencv2/core.hpp"
@@ -50,6 +50,9 @@ namespace cv
 {
 namespace videostab
 {
+
+//! @addtogroup videostab
+//! @{
 
 class CV_EXPORTS IFrameSource
 {
@@ -82,6 +85,8 @@ public:
 private:
     Ptr<IFrameSource> impl;
 };
+
+//! @}
 
 } // namespace videostab
 } // namespace cv

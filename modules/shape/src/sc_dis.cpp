@@ -79,8 +79,6 @@ public:
     {
     }
 
-    virtual AlgorithmInfo* info() const { return 0; }
-
     //! the main operator
     virtual float computeDistance(InputArray contour1, InputArray contour2);
 
@@ -126,10 +124,8 @@ public:
     virtual void getImages(OutputArray _image1, OutputArray _image2) const
     {
         CV_Assert((!image1.empty()) && (!image2.empty()));
-        _image1.create(image1.size(), image1.type());
-        _image2.create(image2.size(), image2.type());
-        _image1.getMat()=image1;
-        _image2.getMat()=image2;
+        image1.copyTo(_image1);
+        image2.copyTo(_image2);
     }
 
     virtual void setIterations(int _iterations) {CV_Assert(_iterations>0); iterations=_iterations;}
@@ -141,6 +137,7 @@ public:
     //! write/read
     virtual void write(FileStorage& fs) const
     {
+        writeFormat(fs);
         fs << "name" << name_
            << "nRads" << nRadialBins
            << "nAngs" << nAngularBins
@@ -189,6 +186,8 @@ protected:
 
 float ShapeContextDistanceExtractorImpl::computeDistance(InputArray contour1, InputArray contour2)
 {
+    CV_INSTRUMENT_REGION()
+
     // Checking //
     Mat sset1=contour1.getMat(), sset2=contour2.getMat(), set1, set2;
     if (set1.type() != CV_32F)
@@ -199,7 +198,7 @@ float ShapeContextDistanceExtractorImpl::computeDistance(InputArray contour1, In
     if (set2.type() != CV_32F)
         sset2.convertTo(set2, CV_32F);
     else
-        sset1.copyTo(set2);
+        sset2.copyTo(set2);
 
     CV_Assert((set1.channels()==2) && (set1.cols>0));
     CV_Assert((set2.channels()==2) && (set2.cols>0));
@@ -495,6 +494,8 @@ void SCDMatcher::matchDescriptors(cv::Mat &descriptors1, cv::Mat &descriptors2, 
 void SCDMatcher::buildCostMatrix(const cv::Mat &descriptors1, const cv::Mat &descriptors2,
                                  cv::Mat &costMatrix, cv::Ptr<cv::HistogramCostExtractor> &comparer) const
 {
+    CV_INSTRUMENT_REGION()
+
     comparer->buildCostMatrix(descriptors1, descriptors2, costMatrix);
 }
 
@@ -765,7 +766,7 @@ void SCDMatcher::hungarian(cv::Mat &costMatrix, std::vector<cv::DMatch> &outMatc
     inliers1.reserve(sizeScd1);
     for (size_t kc = 0; kc<inliers1.size(); kc++)
     {
-        if (rowsol[kc]<sizeScd1) // if a real match
+        if (rowsol[kc]<sizeScd2) // if a real match
             inliers1[kc]=1;
         else
             inliers1[kc]=0;
@@ -773,7 +774,7 @@ void SCDMatcher::hungarian(cv::Mat &costMatrix, std::vector<cv::DMatch> &outMatc
     inliers2.reserve(sizeScd2);
     for (size_t kc = 0; kc<inliers2.size(); kc++)
     {
-        if (colsol[kc]<sizeScd2) // if a real match
+        if (colsol[kc]<sizeScd1) // if a real match
             inliers2[kc]=1;
         else
             inliers2[kc]=0;

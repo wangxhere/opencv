@@ -100,9 +100,7 @@ PERF_TEST_P(Size_MatType_BorderType, blur16x16,
     BorderType btype = get<2>(GetParam());
     double eps = 1e-3;
 
-#if CV_NEON
     eps = CV_MAT_DEPTH(type) <= CV_32S ? 1 : eps;
-#endif
 
     Mat src(size, type);
     Mat dst(size, type);
@@ -183,7 +181,7 @@ PERF_TEST_P(Size_MatType_BorderType, gaussianBlur5x5,
 
     TEST_CYCLE() GaussianBlur(src, dst, Size(5,5), 0, 0, btype);
 
-    SANITY_CHECK(dst, 1e-3);
+    SANITY_CHECK(dst, 1);
 }
 
 PERF_TEST_P(Size_MatType_BorderType, blur5x5,
